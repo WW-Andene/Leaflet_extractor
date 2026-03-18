@@ -336,12 +336,28 @@ export default function EditorTab() {
     if (filled.length === 0) { setDlStatus("Grid is empty!"); return; }
     var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
     var W = cropW * scaledTile, H = cropH * scaledTile;
+    // Browser canvas limits: ~16384px per side, ~268M total pixels
+    var maxSide = 16384;
+    var maxPixels = 268000000;
+    var actualScale = scale;
+    if (W > maxSide || H > maxSide || W * H > maxPixels) {
+      // Auto-reduce scale to fit
+      var fitScale = Math.min(maxSide / (cropW * tSize), maxSide / (cropH * tSize), Math.sqrt(maxPixels / (cropW * tSize * cropH * tSize)));
+      actualScale = Math.floor(fitScale * 10) / 10; // round down to 0.1
+      if (actualScale < 0.1) actualScale = 0.1;
+      scaledTile = Math.round(tSize * actualScale);
+      W = cropW * scaledTile; H = cropH * scaledTile;
+      setDlStatus("Scale " + scale + "x too large (" + (cropW * Math.round(tSize * scale)) + "x" + (cropH * Math.round(tSize * scale)) + "px). Auto-reduced to " + actualScale + "x (" + W + "x" + H + "px)...");
+      await wait(100);
+    }
     var fmt = dlFormat;
     var ext = fmt === "jpeg" ? "jpg" : "png";
     setDlStatus("Rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + ")...");
 
     var c = document.createElement("canvas"); c.width = W; c.height = H;
-    var ctx = c.getContext("2d"); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+    var ctx = c.getContext("2d");
+    if (!ctx) { setDlStatus("Canvas " + W + "x" + H + "px failed — try lower scale"); return; }
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
 
     // Render tiles in batches of 20 for progress updates
     for (var b = 0; b < filled.length; b += 20) {
@@ -551,6 +567,23 @@ export default function EditorTab() {
             style={Object.assign({}, S.sm, dlScale === sc ? {background: "#3b82f6"} : {})}>{sc + "x"}</button>;
         })}
       </div>
+      {(function() {
+        // Preview output dimensions
+        var bMnX = gridW, bMxX = 0, bMnY = gridH, bMxY = 0, cnt = 0;
+        for (var ii = 0; ii < grid.length; ii++) {
+          if (grid[ii]) { var ggx = ii % gridW, ggy = Math.floor(ii / gridW); cnt++;
+            if (ggx < bMnX) bMnX = ggx; if (ggx > bMxX) bMxX = ggx;
+            if (ggy < bMnY) bMnY = ggy; if (ggy > bMxY) bMxY = ggy; }
+        }
+        if (cnt === 0) return null;
+        var ts = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
+        var ow = (bMxX - bMnX + 1) * Math.round(ts * dlScale);
+        var oh = (bMxY - bMnY + 1) * Math.round(ts * dlScale);
+        var warn = ow > 16384 || oh > 16384;
+        return <p style={{fontSize: "0.65rem", color: warn ? "#f59e0b" : "#666", marginTop: 4, marginBottom: 8}}>
+          {"Output: " + ow + "x" + oh + "px (" + cnt + " tiles)" + (warn ? " — may exceed canvas limit, will auto-reduce" : "")}
+        </p>;
+      })()}
       <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
         <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#059669"})}>Download</button>
         <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#7f1d1d"})}>Clear Grid</button>
