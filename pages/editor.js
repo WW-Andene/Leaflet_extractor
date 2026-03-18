@@ -86,6 +86,9 @@ export default function Editor() {
   a = s(""); var sampleUrl = a[0], setSampleUrl = a[1];
   a = s(false); var detecting = a[0], setDetecting = a[1];
 
+  // 4x4 preview
+  a = s(null); var srcPreview = a[0], setSrcPreview = a[1];
+
   // Rebuild palette from bank
   var rebuildPalette = useCallback(function() {
     var bank = bankRef.current;
@@ -187,6 +190,26 @@ export default function Editor() {
     setDetecting(false);
   }
 
+  // 4x4 preview for a source (verify orientation before bulk load)
+  function showSrcPreview(idx) {
+    var src = sources[idx];
+    if (!src.pattern) return;
+    var cx = Math.round((src.minX + src.maxX) / 2);
+    var cy = Math.round((src.minY + src.maxY) / 2);
+    var rows = [];
+    for (var dy = -1; dy <= 2; dy++) {
+      var row = [];
+      for (var dx = -1; dx <= 2; dx++) {
+        var x = cx + dx, y = cy + dy;
+        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.swapXY);
+        var proxiedUrl = "/api/tile-proxy?url=" + encodeURIComponent(rawUrl);
+        row.push({ x: x, y: y, url: proxiedUrl, label: "x=" + x + " y=" + y });
+      }
+      rows.push(row);
+    }
+    setSrcPreview({ rows: rows, srcIdx: idx });
+  }
+
   // Load tiles from source into bank
   async function loadSource(idx) {
     var src = sources[idx];
@@ -218,44 +241,96 @@ export default function Editor() {
     setLoadingSrc(false);
   }
 
-  // Auto-place tiles from source into grid (respects flipX/flipY)
+  // Auto-place tiles from source into grid
+  // - SwapXY transposes cols/rows on grid
+  // - Centers on empty grid, places adjacent on populated grid
   function autoPlace(idx) {
     var src = sources[idx];
     var bank = bankRef.current;
-    var cols = src.maxX - src.minX + 1;
-    var rows = src.maxY - src.minY + 1;
-    var newW = Math.max(gridW, cols);
-    var newH = Math.max(gridH, rows);
-    if (newW * newH > MAX_TILES) { newW = cols; newH = rows; } // fit source at minimum
-    setGrid(function(old) {
-      var oldW = gridW;
-      var ng = new Array(newW * newH).fill(null);
-      // Preserve old cells
-      for (var gy = 0; gy < newH; gy++) {
-        for (var gx = 0; gx < newW; gx++) {
-          if (gx < oldW && gy < Math.floor(old.length / oldW)) {
-            ng[gy * newW + gx] = old[gy * oldW + gx];
-          }
+    var srcCols = src.maxX - src.minX + 1;
+    var srcRows = src.maxY - src.minY + 1;
+    var placeCols = src.swapXY ? srcRows : srcCols;
+    var placeRows = src.swapXY ? srcCols : srcRows;
+
+    // Read current grid state synchronously
+    var oldW = gridW;
+    var oldH = gridH;
+    var oldGrid = grid;
+
+    // Find bounding box of existing content
+    var hasContent = false;
+    var exMinX = oldW, exMaxX = 0, exMinY = oldH, exMaxY = 0;
+    for (var i = 0; i < oldGrid.length; i++) {
+      if (oldGrid[i]) {
+        var cx = i % oldW, cy = Math.floor(i / oldW);
+        hasContent = true;
+        if (cx < exMinX) exMinX = cx;
+        if (cx > exMaxX) exMaxX = cx;
+        if (cy < exMinY) exMinY = cy;
+        if (cy > exMaxY) exMaxY = cy;
+      }
+    }
+
+    // Calculate placement offset and new grid size
+    var offX, offY, newW, newH;
+    if (!hasContent) {
+      newW = Math.max(oldW, placeCols + 4);
+      newH = Math.max(oldH, placeRows + 4);
+      offX = Math.max(0, Math.floor((newW - placeCols) / 2));
+      offY = Math.max(0, Math.floor((newH - placeRows) / 2));
+    } else {
+      // Try right side first (2-tile gap)
+      offX = exMaxX + 2;
+      offY = exMinY;
+      // If too wide, go below instead
+      if (offX + placeCols > Math.max(oldW, exMaxX + 2 + placeCols) + 4) {
+        offX = exMinX;
+        offY = exMaxY + 2;
+      }
+      newW = Math.max(oldW, offX + placeCols);
+      newH = Math.max(oldH, offY + placeRows);
+    }
+
+    if (newW * newH > MAX_TILES) {
+      offX = 0; offY = 0;
+      newW = Math.max(oldW, placeCols);
+      newH = Math.max(oldH, placeRows);
+    }
+
+    // Build new grid
+    var ng = new Array(newW * newH).fill(null);
+    // Copy old cells
+    for (var gy = 0; gy < newH; gy++) {
+      for (var gx = 0; gx < newW; gx++) {
+        if (gx < oldW && gy < oldH) {
+          var oi = gy * oldW + gx;
+          if (oi < oldGrid.length && oldGrid[oi]) ng[gy * newW + gx] = oldGrid[oi];
         }
       }
-      // Place from source with flip support
-      for (var dy = 0; dy < rows; dy++) {
-        for (var dx = 0; dx < cols; dx++) {
-          var tileX = src.minX + dx;
-          var tileY = src.minY + dy;
-          var key = tileKey(idx, tileX, tileY);
-          if (bank[key]) {
-            var gx2 = src.flipX ? (cols - 1 - dx) : dx;
-            var gy2 = src.flipY ? (rows - 1 - dy) : dy;
-            var gi = gy2 * newW + gx2;
-            if (gi < ng.length) {
-              ng[gi] = { key: key, dataUrl: bank[key], srcIdx: idx, ox: tileX, oy: tileY };
-            }
-          }
+    }
+    // Place new tiles
+    for (var dy = 0; dy < srcRows; dy++) {
+      for (var dx = 0; dx < srcCols; dx++) {
+        var tileX = src.minX + dx;
+        var tileY = src.minY + dy;
+        var key = tileKey(idx, tileX, tileY);
+        if (!bank[key]) continue;
+        var gx2, gy2;
+        if (src.swapXY) {
+          gx2 = src.flipX ? (srcRows - 1 - dy) : dy;
+          gy2 = src.flipY ? (srcCols - 1 - dx) : dx;
+        } else {
+          gx2 = src.flipX ? (srcCols - 1 - dx) : dx;
+          gy2 = src.flipY ? (srcRows - 1 - dy) : dy;
+        }
+        var gi = (offY + gy2) * newW + (offX + gx2);
+        if (gi >= 0 && gi < ng.length) {
+          ng[gi] = { key: key, dataUrl: bank[key], srcIdx: idx, ox: tileX, oy: tileY };
         }
       }
-      return ng;
-    });
+    }
+
+    setGrid(ng);
     setGridW(newW);
     setGridH(newH);
   }
@@ -442,9 +517,11 @@ export default function Editor() {
             </p>
 
             <div style={{display: "flex", gap: 4, marginTop: 8}}>
+              <button onClick={function(){showSrcPreview(idx)}} disabled={!src.pattern}
+                style={Object.assign({}, S.btn, {flex: 1, background: "#d97706"})}>4x4</button>
               <button onClick={function(){loadSource(idx)}} disabled={loadingSrc || !src.pattern}
-                style={Object.assign({}, S.btn, {flex: 2}, loadingSrc ? S.off : {background: src.color})}>{loadingSrc ? "Loading..." : "Load Tiles"}</button>
-              <button onClick={function(){autoPlace(idx)}} style={Object.assign({}, S.btn, {flex: 1, background: "#6d28d9"})}>Auto-Place</button>
+                style={Object.assign({}, S.btn, {flex: 2}, loadingSrc ? S.off : {background: src.color})}>{loadingSrc ? "Loading..." : "Load"}</button>
+              <button onClick={function(){autoPlace(idx)}} style={Object.assign({}, S.btn, {flex: 1, background: "#6d28d9"})}>Place</button>
               {sources.length > 1 && <button onClick={function(){removeSource(idx)}} style={Object.assign({}, S.btn, {flex: 0, padding: "8px 12px", background: "#7f1d1d"})}>X</button>}
             </div>
           </>;
@@ -453,6 +530,25 @@ export default function Editor() {
         {loadStatus && <p style={S.st}>{loadStatus}</p>}
         {loadingSrc && loadProgress > 0 && <div style={S.bar}><div style={Object.assign({}, S.fill, {width: loadProgress + "%"})} /></div>}
       </div>
+
+      {/* === 4x4 PREVIEW === */}
+      {srcPreview && <div style={S.card}>
+        <p style={S.sec}>{"4x4 Preview (Source " + (srcPreview.srcIdx + 1) + " center)"}</p>
+        <p style={{fontSize: "0.68rem", color: "#888", marginBottom: 6}}>
+          If tiles look scrambled, toggle Swap XY / Flip above, then tap 4x4 again.
+        </p>
+        <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 1, background: "#000", borderRadius: 6, overflow: "hidden"}}>
+          {srcPreview.rows.flat().map(function(tile, i) {
+            return <div key={i} style={{position: "relative", background: "#0a0a0f"}}>
+              <img src={tile.url} style={{width: "100%", display: "block"}} alt={tile.label}
+                onError={function(e){e.target.style.opacity = 0.1}} />
+              <div style={{position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.7)", color: "#6ee7b7", fontSize: "0.42rem", padding: "1px 2px", textAlign: "center"}}>
+                {tile.label}
+              </div>
+            </div>;
+          })}
+        </div>
+      </div>}
 
       {/* === PALETTE === */}
       {paletteTiles.length > 0 && <div style={S.card}>
