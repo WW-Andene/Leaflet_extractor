@@ -34,7 +34,7 @@ export default function Home() {
   a = s(true); var useProxy = a[0], setUseProxy = a[1];
   a = s(false); var flipY = a[0], setFlipY = a[1];
   a = s(false); var flipX = a[0], setFlipX = a[1];
-  a = s("zxy"); var coordOrder = a[0], setCoordOrder = a[1];
+  a = s(false); var swapXY = a[0], setSwapXY = a[1];
   a = s(null); var gridPreview = a[0], setGridPreview = a[1];
   a = s(null); var probeImg = a[0], setProbeImg = a[1];
   a = s([]); var failedTiles = a[0], setFailedTiles = a[1];
@@ -90,15 +90,10 @@ export default function Home() {
         setZoom(d.detectedZoom);
         setMinX(d.bounds.minX); setMinY(d.bounds.minY);
         setMaxX(d.bounds.maxX); setMaxY(d.bounds.maxY);
-        // Auto-set flipY if TMS detected
-        if (d.mapConfig && d.mapConfig.tms) setFlipY(true);
         var cols = d.bounds.maxX - d.bounds.minX + 1;
         var rows = d.bounds.maxY - d.bounds.minY + 1;
-        var info = "Zoom " + d.detectedZoom + " | " + cols + "x" + rows + " tiles";
-        if (d.mapConfig) {
-          if (d.mapConfig.tms) info += " | TMS (Flip Y auto-ON)";
-          if (d.mapConfig.crs) info += " | CRS: " + d.mapConfig.crs;
-        }
+        var info = d.format + " format | Zoom " + d.detectedZoom + " | " + cols + "x" + rows + " tiles (" + (cols * rows) + ")";
+        if (d.bounds.refTileSize) info += " | ref ~" + Math.round(d.bounds.refTileSize / 1024) + "KB/tile";
         setStitchStatus(info);
         var testUrl = d.pattern.replace("{z}", d.detectedZoom).replace("{x}", d.detectedX).replace("{y}", d.detectedY);
         setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(testUrl));
@@ -109,14 +104,10 @@ export default function Home() {
     setProbing(false);
   }
 
-  var COORD_ORDERS = ["zxy", "zyx", "xzy", "xyz", "yzx", "yxz"];
-  var COORD_LABELS = ["ZXY", "ZYX", "XZY", "XYZ", "YZX", "YXZ"];
-
   // --- HELPERS ---
   function buildUrl(pat, z, x, y) {
-    var o = coordOrder;
-    var v = { z: z, x: x, y: y };
-    return pat.replace("{z}", v[o[0]]).replace("{x}", v[o[1]]).replace("{y}", v[o[2]]);
+    if (swapXY) return pat.replace("{z}", z).replace("{x}", y).replace("{y}", x);
+    return pat.replace("{z}", z).replace("{x}", x).replace("{y}", y);
   }
   function loadImg(src) {
     return new Promise(function(res) {
@@ -410,7 +401,7 @@ export default function Home() {
           <div style={S.g3}>
             <div><p style={S.ml}>Flip Y</p><button onClick={function(){setFlipY(!flipY)}} style={Object.assign({}, S.si, {background: flipY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{flipY ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip X</p><button onClick={function(){setFlipX(!flipX)}} style={Object.assign({}, S.si, {background: flipX ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{flipX ? "ON" : "OFF"}</button></div>
-            <div><p style={S.ml}>Order</p><button onClick={function(){var i = COORD_ORDERS.indexOf(coordOrder); setCoordOrder(COORD_ORDERS[(i+1) % 6])}} style={Object.assign({}, S.si, {background: coordOrder !== "zxy" ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{coordOrder.toUpperCase()}</button></div>
+            <div><p style={S.ml}>Swap XY</p><button onClick={function(){setSwapXY(!swapXY)}} style={Object.assign({}, S.si, {background: swapXY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{swapXY ? "ON" : "OFF"}</button></div>
           </div>
           <div style={S.g4}>
             <div><p style={S.ml}>Min X</p><input type="number" value={minX} onChange={function(e){setMinX(+e.target.value)}} style={S.si} /></div>

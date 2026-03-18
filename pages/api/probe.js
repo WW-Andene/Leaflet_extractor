@@ -58,6 +58,7 @@ function build(pattern, z, x, y) {
 
 async function findBounds(pattern, zoom, knownX, knownY) {
   const bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  refTileSize = 0; // Reset for this request
 
   // Measure the known-good tile to set reference size
   var knownUrl = build(pattern, zoom, knownX, knownY);
