@@ -130,12 +130,26 @@ export default function Home() {
     const all = [];
     for (let y = minY; y <= maxY; y++)
       for (let x = minX; x <= maxX; x++) all.push({ x, y });
-    const batch = 6;
+
+    // Small batches + delay to avoid rate limiting
+    const batch = 3;
+    const delayMs = 200;
+
     for (let i = 0; i < all.length; i += batch) {
       const b = all.slice(i, i + batch);
       await Promise.all(b.map(async ({ x, y }) => {
-        const u = proxied(buildUrl(tilePattern, zoom, x, y));
-        const img = await loadImg(u);
+        const rawUrl = buildUrl(tilePattern, zoom, x, y);
+        const u = proxied(rawUrl);
+
+        // Try up to 3 times
+        let img = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          img = await loadImg(u);
+          if (img) break;
+          // Wait before retry, longer each time
+          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        }
+
         if (img) {
           const px = (flipX ? (maxX - x) : (x - minX)) * tileSize;
           const py = (flipY ? (maxY - y) : (y - minY)) * tileSize;
@@ -143,10 +157,13 @@ export default function Home() {
         }
         else fail++;
       }));
+
+      // Delay between batches to avoid rate limit
+      await new Promise(r => setTimeout(r, delayMs));
       setStitchProgress(Math.round(((i + b.length) / all.length) * 100));
-      setStitchStatus((done + fail) + "/" + total + " (" + fail + " failed)");
+      setStitchStatus(done + "/" + total + " loaded (" + fail + " failed)");
     }
-    setStitchStatus("Done! " + done + "/" + total + " tiles. " + W + "x" + H + "px");
+    setStitchStatus("Done! " + done + "/" + total + " tiles. " + W + "x" + H + "px" + (fail > 0 ? " (" + fail + " failed)" : " ✅"));
     c.toBlob(blob => { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
     setStitching(false);
   }
