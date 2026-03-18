@@ -29,9 +29,9 @@ function emptySource() {
     tileSize: 256, color: COLORS[0], swapXY: false, transpose: false, flipX: false, flipY: false };
 }
 var COLORS = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b"];
-var TOOLS = ["place", "pick", "swap", "erase"];
-var TOOL_LABELS = { place: "Place", pick: "Pick", swap: "Swap", erase: "Erase" };
-var TOOL_COLORS = { place: "#3b82f6", pick: "#8b5cf6", swap: "#f59e0b", erase: "#ef4444" };
+var TOOLS = ["place", "paint", "pick", "swap", "box", "erase"];
+var TOOL_LABELS = { place: "Place", paint: "Paint", pick: "Pick", swap: "Swap", box: "Box", erase: "Erase" };
+var TOOL_COLORS = { place: "#3b82f6", paint: "#2563eb", pick: "#8b5cf6", swap: "#f59e0b", box: "#059669", erase: "#ef4444" };
 
 export default function EditorTab() {
   var s = useState, a;
@@ -59,6 +59,10 @@ export default function EditorTab() {
   a = s(""); var sampleUrl = a[0], setSampleUrl = a[1];
   a = s(false); var detecting = a[0], setDetecting = a[1];
   a = s(null); var srcPreview = a[0], setSrcPreview = a[1];
+  a = s(null); var boxFirst = a[0], setBoxFirst = a[1]; // box fill first corner
+  var paintingRef = useRef(false); // drag-to-paint active
+  a = s("jpeg"); var dlFormat = a[0], setDlFormat = a[1]; // jpeg or png
+  a = s(1); var dlScale = a[0], setDlScale = a[1]; // 0.5 or 1
 
   var rebuildPalette = useCallback(function() {
     var bank = bankRef.current;
@@ -268,47 +272,108 @@ export default function EditorTab() {
     setGrid(ng);
   }
 
+  // Paint a single cell (used by paint drag and place)
+  function paintCell(idx) {
+    if (!selected) return;
+    setGrid(function(old) { var ng = old.slice(); ng[idx] = Object.assign({}, selected); return ng; });
+  }
+
   function onCellClick(idx) {
-    if (tool === "place") { if (!selected) return; setGrid(function(old) { var ng = old.slice(); ng[idx] = Object.assign({}, selected); return ng; }); }
+    if (tool === "place") { paintCell(idx); }
+    else if (tool === "paint") { paintCell(idx); }
     else if (tool === "pick") { var cell = grid[idx]; if (cell) { setSelected(Object.assign({}, cell)); setTool("place"); } }
     else if (tool === "swap") { if (swapFirst === null) setSwapFirst(idx); else { setGrid(function(old) { var ng = old.slice(); var tmp = ng[swapFirst]; ng[swapFirst] = ng[idx]; ng[idx] = tmp; return ng; }); setSwapFirst(null); } }
+    else if (tool === "box") {
+      if (boxFirst === null) { setBoxFirst(idx); }
+      else {
+        // Fill rectangle between boxFirst and idx
+        if (!selected) { setBoxFirst(null); return; }
+        var x1 = boxFirst % gridW, y1 = Math.floor(boxFirst / gridW);
+        var x2 = idx % gridW, y2 = Math.floor(idx / gridW);
+        var minGx = Math.min(x1, x2), maxGx = Math.max(x1, x2);
+        var minGy = Math.min(y1, y2), maxGy = Math.max(y1, y2);
+        setGrid(function(old) {
+          var ng = old.slice();
+          for (var gy = minGy; gy <= maxGy; gy++)
+            for (var gx = minGx; gx <= maxGx; gx++)
+              ng[gy * gridW + gx] = Object.assign({}, selected);
+          return ng;
+        });
+        setBoxFirst(null);
+      }
+    }
     else if (tool === "erase") { setGrid(function(old) { var ng = old.slice(); ng[idx] = null; return ng; }); }
   }
 
-  function downloadGrid() {
+  // Drag-to-paint: mouse/touch move handler
+  function onCellEnter(idx) {
+    if (tool === "paint" && paintingRef.current && selected) {
+      paintCell(idx);
+    } else if (tool === "erase" && paintingRef.current) {
+      setGrid(function(old) { var ng = old.slice(); ng[idx] = null; return ng; });
+    }
+  }
+
+  function onGridPointerDown() { paintingRef.current = true; }
+  function onGridPointerUp() { paintingRef.current = false; }
+
+  async function downloadGrid() {
     var tSize = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
-    // Find bounding box of filled cells
+    var scale = dlScale;
+    var scaledTile = Math.round(tSize * scale);
+    // Find bounding box
     var bMinX = gridW, bMaxX = 0, bMinY = gridH, bMaxY = 0;
-    var total = 0;
+    var filled = [];
     for (var i = 0; i < grid.length; i++) {
       if (grid[i]) {
         var gx = i % gridW, gy = Math.floor(i / gridW);
         if (gx < bMinX) bMinX = gx; if (gx > bMaxX) bMaxX = gx;
         if (gy < bMinY) bMinY = gy; if (gy > bMaxY) bMaxY = gy;
-        total++;
+        filled.push({ idx: i, cell: grid[i], gx: gx, gy: gy });
       }
     }
-    if (total === 0) { setDlStatus("Grid is empty!"); return; }
+    if (filled.length === 0) { setDlStatus("Grid is empty!"); return; }
     var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
-    var W = cropW * tSize, H = cropH * tSize;
-    setDlStatus("Rendering " + W + "x" + H + "px (" + total + " tiles, cropped)...");
+    var W = cropW * scaledTile, H = cropH * scaledTile;
+    var fmt = dlFormat;
+    var ext = fmt === "jpeg" ? "jpg" : "png";
+    setDlStatus("Rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + ")...");
+
     var c = document.createElement("canvas"); c.width = W; c.height = H;
     var ctx = c.getContext("2d"); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-    var promises = [];
-    for (var i2 = 0; i2 < grid.length; i2++) { if (!grid[i2]) continue;
-      (function(idx2, cell) {
-        var gx2 = idx2 % gridW - bMinX, gy2 = Math.floor(idx2 / gridW) - bMinY;
-        promises.push(new Promise(function(res) { var img = new Image();
+
+    // Render tiles in batches of 20 for progress updates
+    for (var b = 0; b < filled.length; b += 20) {
+      var batch = filled.slice(b, b + 20);
+      await Promise.all(batch.map(function(t) {
+        return new Promise(function(res) {
+          var img = new Image();
           img.crossOrigin = "anonymous";
-          img.onload = function() { ctx.drawImage(img, gx2 * tSize, gy2 * tSize, tSize, tSize); res(); };
-          img.onerror = function() { res(); }; img.src = cell.dataUrl; }));
-      })(i2, grid[i2]); }
-    Promise.all(promises).then(function() {
-      c.toBlob(function(blob) { if (!blob) { setDlStatus("Render failed — canvas too large?"); return; }
-        var dl = document.createElement("a"); var blobUrl = URL.createObjectURL(blob); dl.href = blobUrl;
-        dl.download = "tilemap_" + W + "x" + H + ".png"; dl.click();
-        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
-        setDlStatus("Downloaded " + W + "x" + H + "px!"); }, "image/png"); });
+          img.onload = function() {
+            ctx.drawImage(img, (t.gx - bMinX) * scaledTile, (t.gy - bMinY) * scaledTile, scaledTile, scaledTile);
+            res();
+          };
+          img.onerror = function() { res(); };
+          img.src = t.cell.dataUrl;
+        });
+      }));
+      setDlStatus("Rendering: " + Math.min(b + 20, filled.length) + "/" + filled.length + " tiles...");
+    }
+
+    setDlStatus("Encoding " + fmt.toUpperCase() + "...");
+    // Small delay to let UI update before heavy encode
+    await wait(50);
+
+    var mimeType = fmt === "jpeg" ? "image/jpeg" : "image/png";
+    var quality = fmt === "jpeg" ? 0.92 : undefined;
+    c.toBlob(function(blob) {
+      if (!blob) { setDlStatus("Render failed — canvas too large?"); return; }
+      var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
+      var dl = document.createElement("a"); var blobUrl = URL.createObjectURL(blob); dl.href = blobUrl;
+      dl.download = "tilemap_" + W + "x" + H + "." + ext; dl.click();
+      setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
+      setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase());
+    }, mimeType, quality);
   }
 
   function clearGrid() { setGrid(new Array(GRID_W * GRID_H).fill(null)); setSwapFirst(null); }
@@ -417,9 +482,9 @@ export default function EditorTab() {
     <div style={S.card}>
       <div style={{display: "flex", gap: 4, marginBottom: 8}}>
         {TOOLS.map(function(t) {
-          return <button key={t} onClick={function(){setTool(t); if (t !== "swap") setSwapFirst(null);}}
+          return <button key={t} onClick={function(){setTool(t); if (t !== "swap") setSwapFirst(null); if (t !== "box") setBoxFirst(null);}}
             style={Object.assign({}, S.btn, {flex: 1, fontSize: "0.76rem", padding: 9, background: tool === t ? TOOL_COLORS[t] : "#1e1e2e", color: tool === t ? "#fff" : "#888"})}>
-            {TOOL_LABELS[t]}{t === "swap" && swapFirst !== null ? " *" : ""}
+            {TOOL_LABELS[t]}{t === "swap" && swapFirst !== null ? " *" : ""}{t === "box" && boxFirst !== null ? " *" : ""}
           </button>;
         })}
       </div>
@@ -439,24 +504,26 @@ export default function EditorTab() {
     </div>
 
     {/* GRID */}
-    <div style={Object.assign({}, S.card, {padding: 4, overflow: "auto", WebkitOverflowScrolling: "touch", maxHeight: "60vh"})}>
-      <div style={{display: "grid", gridTemplateColumns: "repeat(" + gridW + ", " + Math.round(64 * gridZoom) + "px)", gap: gridZoom <= 0.1 ? 0 : 1, background: "#111", width: "fit-content"}}>
+    <div style={Object.assign({}, S.card, {padding: 4, overflow: "auto", WebkitOverflowScrolling: "touch", maxHeight: "60vh", touchAction: (tool === "paint" || tool === "erase") ? "none" : "auto"})}
+      onPointerDown={onGridPointerDown} onPointerUp={onGridPointerUp} onPointerLeave={onGridPointerUp}>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(" + gridW + ", " + Math.max(2, Math.round(64 * gridZoom)) + "px)", gap: gridZoom <= 0.1 ? 0 : 1, background: "#111", width: "fit-content"}}>
         {grid.map(function(cell, idx) {
           var gx = idx % gridW, gy = Math.floor(idx / gridW);
           var cellSize = Math.max(2, Math.round(64 * gridZoom));
-          var isSS = (tool === "swap" && swapFirst === idx);
-          // At tiny zoom, render simple colored squares (no images = much faster)
+          var isSS = (tool === "swap" && swapFirst === idx) || (tool === "box" && boxFirst === idx);
           if (gridZoom <= 0.1) {
-            return <div key={idx} onClick={function(){onCellClick(idx)}}
+            return <div key={idx}
+              onPointerDown={function(){onCellClick(idx)}} onPointerEnter={function(){onCellEnter(idx)}}
               style={{width: cellSize, height: cellSize, cursor: "pointer", boxSizing: "border-box",
                 background: cell ? (sources[cell.srcIdx] ? sources[cell.srcIdx].color : "#3b82f6") : "#0a0a0f",
                 border: isSS ? "1px solid #f59e0b" : "none"}} />;
           }
-          return <div key={idx} onClick={function(){onCellClick(idx)}}
+          return <div key={idx}
+            onPointerDown={function(){onCellClick(idx)}} onPointerEnter={function(){onCellEnter(idx)}}
             style={{width: cellSize, height: cellSize, background: cell ? "transparent" : "#0a0a0f",
               border: isSS ? "2px solid #f59e0b" : (gridZoom >= 0.5 ? "1px solid #1a1a2a" : "none"),
               cursor: "pointer", position: "relative", overflow: "hidden", boxSizing: "border-box"}}>
-            {cell && <img src={cell.dataUrl} style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}} alt="" />}
+            {cell && <img src={cell.dataUrl} draggable="false" style={{width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none"}} alt="" />}
             {!cell && gridZoom >= 0.5 && <span style={{position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: "0.4rem", color: "#222"}}>{gx + "," + gy}</span>}
             {cell && gridZoom >= 0.25 && cell.srcIdx !== undefined && sources[cell.srcIdx] && <div style={{position: "absolute", top: 0, right: 0, width: 5, height: 5, borderRadius: "0 0 0 3px", background: sources[cell.srcIdx].color}} />}
           </div>;
@@ -464,11 +531,25 @@ export default function EditorTab() {
       </div>
     </div>
 
-    {/* ACTIONS */}
-    <div style={Object.assign({}, S.card, {display: "flex", gap: 6, flexWrap: "wrap"})}>
-      <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#059669"})}>Download</button>
-      <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#7f1d1d"})}>Clear Grid</button>
-      <button onClick={clearBank} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#991b1b"})}>Clear Bank</button>
+    {/* DOWNLOAD OPTIONS */}
+    <div style={S.card}>
+      <div style={{display: "flex", gap: 6, alignItems: "center", marginBottom: 8}}>
+        <p style={{fontSize: "0.72rem", color: "#888"}}>Format:</p>
+        {["jpeg", "png"].map(function(f) {
+          return <button key={f} onClick={function(){setDlFormat(f)}}
+            style={Object.assign({}, S.sm, dlFormat === f ? {background: "#3b82f6"} : {})}>{f.toUpperCase()}</button>;
+        })}
+        <p style={{fontSize: "0.72rem", color: "#888", marginLeft: 8}}>Scale:</p>
+        {[0.25, 0.5, 1].map(function(sc) {
+          return <button key={sc} onClick={function(){setDlScale(sc)}}
+            style={Object.assign({}, S.sm, dlScale === sc ? {background: "#3b82f6"} : {})}>{sc + "x"}</button>;
+        })}
+      </div>
+      <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
+        <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#059669"})}>Download</button>
+        <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#7f1d1d"})}>Clear Grid</button>
+        <button onClick={clearBank} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#991b1b"})}>Clear Bank</button>
+      </div>
     </div>
     {dlStatus && <p style={Object.assign({}, S.st, {textAlign: "center"})}>{dlStatus}</p>}
   </>;
