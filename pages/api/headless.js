@@ -1,22 +1,30 @@
-import chromium from "@sparticuz/chromium-min";
+import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 
 export const maxDuration = 60;
 
+// Fix for missing shared libraries on Vercel
+chromium.setGraphicsMode = false;
+
 export default async function handler(req, res) {
   const { url, maxZoom } = req.query;
   const targetUrl = url || "https://wuthering.th.gl/maps/Overworld";
-  const targetZoom = parseInt(maxZoom) || 5;
+  const targetZoom = parseInt(maxZoom) || 4;
 
   let browser = null;
 
   try {
-    const execPath = await chromium.executablePath(
-      "https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar"
-    );
+    const execPath = await chromium.executablePath();
+
+    // Set LD_LIBRARY_PATH to chromium's directory so it finds libnss3 etc
+    const chromiumDir = execPath.substring(0, execPath.lastIndexOf("/"));
+    process.env.LD_LIBRARY_PATH = chromiumDir + ":" + (process.env.LD_LIBRARY_PATH || "");
 
     browser = await puppeteer.launch({
-      args: [...chromium.args, "--hide-scrollbars", "--disable-web-security"],
+      args: puppeteer.defaultArgs({
+        args: chromium.args,
+        headless: "shell",
+      }),
       defaultViewport: { width: 1920, height: 1080 },
       executablePath: execPath,
       headless: "shell",
@@ -57,7 +65,6 @@ export default async function handler(req, res) {
     await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 25000 });
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Extract Leaflet info from the page
     const leafletInfo = await page.evaluate(() => {
       const result = { tileUrls: [], patterns: [], mapInfo: null, canvasCount: 0 };
       result.canvasCount = document.querySelectorAll("canvas").length;
@@ -69,8 +76,7 @@ export default async function handler(req, res) {
           const obj = window[key];
           if (obj && typeof obj.getZoom === "function" && typeof obj.eachLayer === "function") {
             result.mapInfo = {
-              zoom: obj.getZoom(),
-              maxZoom: obj.getMaxZoom(),
+              zoom: obj.getZoom(), maxZoom: obj.getMaxZoom(),
               minZoom: obj.getMinZoom(),
               center: [obj.getCenter().lat, obj.getCenter().lng],
             };
@@ -92,15 +98,13 @@ export default async function handler(req, res) {
     leafletInfo.tileUrls.forEach((u) => tileUrls.add(u));
     leafletInfo.patterns.forEach((p) => tilePatterns.add(p));
 
-    // Zoom through levels to capture tiles
     for (let z = 1; z <= Math.min(targetZoom, 7); z++) {
       await page.evaluate((zl) => {
         for (const key of Object.keys(window)) {
           try {
             const obj = window[key];
             if (obj && typeof obj.setZoom === "function" && typeof obj.getZoom === "function") {
-              obj.setZoom(zl);
-              break;
+              obj.setZoom(zl); break;
             }
           } catch (e) {}
         }
