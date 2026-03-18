@@ -45,6 +45,7 @@ export default function Home() {
   const [probeImg, setProbeImg] = useState(null);
   const [probing, setProbing] = useState(false);
   const [selectedMap, setSelectedMap] = useState("AkiWorld_WP");
+  const [jsFindings, setJsFindings] = useState([]);
 
   // --- EXTRACT ---
   async function extract() {
@@ -75,20 +76,19 @@ export default function Home() {
 
   // --- AUTO PROBE CDN ---
   async function autoProbe() {
-    setProbing(true); setProbeImg(null);
-    setStitchStatus("Probing CDN patterns for " + selectedMap + "...");
+    setProbing(true); setProbeImg(null); setJsFindings([]);
+    setStitchStatus("Probing CDN + scanning JS for " + selectedMap + "... (may take 30-60s)");
     try {
       const r = await fetch("/api/probe?mapId=" + encodeURIComponent(selectedMap));
       const d = await r.json();
+      if (d.jsFindings && d.jsFindings.length > 0) setJsFindings(d.jsFindings);
       if (d.working && d.working.length > 0) {
         const w = d.working[0];
         setTilePattern(w.pattern);
-        setStitchStatus("Found working pattern! " + w.pattern + " (tested z=" + w.z + " x=" + w.x + " y=" + w.y + ")");
-        // Load probe image for preview
-        const testUrl = w.testedUrl;
-        setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(testUrl));
+        setStitchStatus("Found! " + w.pattern + " (" + w.contentLength + " bytes, z=" + w.z + ")");
+        setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(w.testedUrl));
       } else {
-        setStitchStatus("No working tile pattern found for " + selectedMap + ". Tested " + d.candidatesTested + " patterns.");
+        setStitchStatus("No tile match after " + d.totalTested + " URLs." + (d.jsFindings.length ? " Found " + d.jsFindings.length + " CDN refs in JS!" : ""));
       }
     } catch (e) {
       setStitchStatus("Probe error: " + e.message);
@@ -248,6 +248,17 @@ export default function Home() {
         {probeImg && <div style={S.card}>
           <p style={S.sec}>Probe Preview:</p>
           <img src={probeImg} style={{maxWidth: "100%", borderRadius: 6, border: "1px solid #333"}} alt="probe" />
+        </div>}
+
+        {/* JS FINDINGS */}
+        {jsFindings.length > 0 && <div style={S.card}>
+          <p style={S.sec}>JS Bundle Findings ({jsFindings.length}):</p>
+          <p style={{fontSize: "0.72rem", color: "#888", marginBottom: 8}}>URLs found in the site{"'"}s JavaScript bundles — these may reveal the tile pattern:</p>
+          <div style={{...S.mono, maxHeight: 250, overflowY: "auto"}}>
+            {jsFindings.map((f, i) => <div key={i} style={{marginBottom: 6}}>
+              <span style={{color: "#888", fontSize: "0.6rem"}}>[{f.source}]</span><br/>{f.url}
+            </div>)}
+          </div>
         </div>}
 
         {/* STITCHED MAP */}
