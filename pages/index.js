@@ -77,9 +77,16 @@ export default function Home() {
         setZoom(d.detectedZoom);
         setMinX(d.bounds.minX); setMinY(d.bounds.minY);
         setMaxX(d.bounds.maxX); setMaxY(d.bounds.maxY);
+        // Auto-set flipY if TMS detected
+        if (d.mapConfig && d.mapConfig.tms) setFlipY(true);
         var cols = d.bounds.maxX - d.bounds.minX + 1;
         var rows = d.bounds.maxY - d.bounds.minY + 1;
-        setStitchStatus("Pattern: " + d.pattern + " | Zoom " + d.detectedZoom + " | " + cols + "x" + rows + " tiles");
+        var info = "Zoom " + d.detectedZoom + " | " + cols + "x" + rows + " tiles";
+        if (d.mapConfig) {
+          if (d.mapConfig.tms) info += " | TMS (Flip Y auto-ON)";
+          if (d.mapConfig.crs) info += " | CRS: " + d.mapConfig.crs;
+        }
+        setStitchStatus(info);
         var testUrl = d.pattern.replace("{z}", d.detectedZoom).replace("{x}", d.detectedX).replace("{y}", d.detectedY);
         setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(testUrl));
       } else {
@@ -89,17 +96,14 @@ export default function Home() {
     setProbing(false);
   }
 
-  // --- COORD ORDER ---
   var COORD_ORDERS = ["zxy", "zyx", "xzy", "xyz", "yzx", "yxz"];
-  function nextOrder() {
-    var i = COORD_ORDERS.indexOf(coordOrder);
-    setCoordOrder(COORD_ORDERS[(i + 1) % COORD_ORDERS.length]);
-  }
+  var COORD_LABELS = ["ZXY", "ZYX", "XZY", "XYZ", "YZX", "YXZ"];
 
   // --- HELPERS ---
   function buildUrl(pat, z, x, y) {
-    var vals = { z: z, x: x, y: y };
-    return pat.replace("{z}", vals[coordOrder[0]]).replace("{x}", vals[coordOrder[1]]).replace("{y}", vals[coordOrder[2]]);
+    var o = coordOrder;
+    var v = { z: z, x: x, y: y };
+    return pat.replace("{z}", v[o[0]]).replace("{x}", v[o[1]]).replace("{y}", v[o[2]]);
   }
   function loadImg(src) {
     return new Promise(function(res) {
@@ -312,14 +316,42 @@ export default function Home() {
             <p style={Object.assign({}, S.sec, {marginTop: 12})}>{"Tiles (" + results.tiles.length + "):"}</p>
             <div style={Object.assign({}, S.mono, {maxHeight: 160, overflowY: "auto"})}>{results.tiles.map(function(t, i) { return <div key={i}>{t}</div>; })}</div>
           </>}
+          {results.mapConfig && results.mapConfig.tileLayerConfigs && results.mapConfig.tileLayerConfigs.length > 0 && <>
+            <p style={Object.assign({}, S.sec, {marginTop: 12, color: "#6ee7b7"})}>Leaflet Config Detected:</p>
+            {results.mapConfig.tileLayerConfigs.map(function(cfg, i) {
+              return <div key={i} style={Object.assign({}, S.mono, {color: "#93c5fd"})}>
+                {"URL: " + cfg.url}<br/>
+                {cfg.tms ? "TMS: YES (Y-axis inverted)" : "TMS: no"}<br/>
+                {cfg.minZoom !== null ? "Zoom: " + cfg.minZoom + "-" + cfg.maxZoom : ""}{cfg.zoomOffset ? " offset:" + cfg.zoomOffset : ""}<br/>
+                {cfg.tileSize ? "Tile size: " + cfg.tileSize + "px" : ""}
+                {cfg.bounds ? "\nBounds: " + JSON.stringify(cfg.bounds) : ""}
+              </div>;
+            })}
+            {results.mapConfig.crs && <p style={{fontSize: "0.7rem", color: "#6ee7b7"}}>{"CRS: " + results.mapConfig.crs}</p>}
+            {results.mapConfig.bounds && <p style={{fontSize: "0.7rem", color: "#6ee7b7"}}>{"Map bounds: " + JSON.stringify(results.mapConfig.bounds)}</p>}
+            {results.mapConfig.globalTms && <p style={{fontSize: "0.7rem", color: "#f59e0b"}}>{"Global TMS detected (Y-axis inverted)"}</p>}
+          </>}
           <div style={{display: "flex", gap: 8, marginTop: 10}}>
             <button onClick={function() {
               var t = (results.patterns || []).join("\n") + "\n" + (results.tiles || []).join("\n");
               navigator.clipboard.writeText(t).catch(function(){});
               setCopied(true); setTimeout(function(){setCopied(false)}, 2000);
             }} style={Object.assign({}, S.btn, {flex: 1, background: "#059669", color: "#fff"})}>{copied ? "Copied!" : "Copy"}</button>
-            <button onClick={function() { if (results.patterns[0]) setTilePattern(results.patterns[0]); setTab("stitch"); }}
-              style={Object.assign({}, S.btn, {flex: 1, background: "#7c3aed", color: "#fff"})}>{"Stitch \u2192"}</button>
+            <button onClick={function() {
+              if (results.patterns[0]) setTilePattern(results.patterns[0]);
+              // Auto-apply config
+              if (results.mapConfig) {
+                var cfg = results.mapConfig;
+                if (cfg.tileLayerConfigs && cfg.tileLayerConfigs[0]) {
+                  var tc = cfg.tileLayerConfigs[0];
+                  if (tc.tms) setFlipY(true);
+                  if (tc.tileSize) setTileSize(tc.tileSize);
+                  if (tc.minZoom !== null) setZoom(tc.maxZoom || tc.minZoom);
+                }
+                if (cfg.globalTms) setFlipY(true);
+              }
+              setTab("stitch");
+            }} style={Object.assign({}, S.btn, {flex: 1, background: "#7c3aed", color: "#fff"})}>{"Stitch \u2192"}</button>
           </div>
         </div>}
       </>}
@@ -365,7 +397,7 @@ export default function Home() {
           <div style={S.g3}>
             <div><p style={S.ml}>Flip Y</p><button onClick={function(){setFlipY(!flipY)}} style={Object.assign({}, S.si, {background: flipY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{flipY ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip X</p><button onClick={function(){setFlipX(!flipX)}} style={Object.assign({}, S.si, {background: flipX ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{flipX ? "ON" : "OFF"}</button></div>
-            <div><p style={S.ml}>Order</p><button onClick={nextOrder} style={Object.assign({}, S.si, {background: coordOrder !== "zxy" ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{coordOrder.toUpperCase()}</button></div>
+            <div><p style={S.ml}>Order</p><button onClick={function(){var i = COORD_ORDERS.indexOf(coordOrder); setCoordOrder(COORD_ORDERS[(i+1) % 6])}} style={Object.assign({}, S.si, {background: coordOrder !== "zxy" ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{coordOrder.toUpperCase()}</button></div>
           </div>
           <div style={S.g4}>
             <div><p style={S.ml}>Min X</p><input type="number" value={minX} onChange={function(e){setMinX(+e.target.value)}} style={S.si} /></div>
@@ -394,7 +426,7 @@ export default function Home() {
         {gridPreview && <div style={S.card}>
           <p style={S.sec}>4x4 Grid Preview (center of map):</p>
           <p style={{fontSize: "0.7rem", color: "#888", marginBottom: 8}}>
-            If tiles are scrambled, try cycling Order (ZXY/ZYX/...) or Flip options, then tap 4x4 again.
+            If tiles are scrambled, try toggling Swap XY or Flip options, then tap 4x4 again.
           </p>
           <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 2, background: "#000", borderRadius: 6, overflow: "hidden"}}>
             {gridPreview.flat().map(function(tile, i) { return (

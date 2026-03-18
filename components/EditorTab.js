@@ -6,8 +6,8 @@ var COORD_ORDERS = ["zxy", "zyx", "xzy", "xyz", "yzx", "yxz"];
 
 function buildUrl(pat, z, x, y, order) {
   var o = order || "zxy";
-  var vals = { z: z, x: x, y: y };
-  return pat.replace("{z}", vals[o[0]]).replace("{x}", vals[o[1]]).replace("{y}", vals[o[2]]);
+  var v = { z: z, x: x, y: y };
+  return pat.replace("{z}", v[o[0]]).replace("{x}", v[o[1]]).replace("{y}", v[o[2]]);
 }
 function tileKey(src, x, y) { return src + ":" + x + "," + y; }
 function loadImgAsDataUrl(src) {
@@ -27,7 +27,7 @@ function loadImgAsDataUrl(src) {
 function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 function emptySource() {
   return { name: "", pattern: "", zoom: 3, minX: 0, maxX: 7, minY: 0, maxY: 7,
-    tileSize: 256, color: COLORS[0], coordOrder: "zxy", transpose: false, flipX: false, flipY: false };
+    tileSize: 256, color: COLORS[0], swapXY: false, transpose: false, flipX: false, flipY: false };
 }
 var COLORS = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b"];
 var TOOLS = ["place", "pick", "swap", "erase"];
@@ -134,7 +134,7 @@ export default function EditorTab() {
     for (var dy = -1; dy <= 2; dy++) {
       for (var dx = -1; dx <= 2; dx++) {
         var x = cx + dx, y = cy + dy;
-        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.coordOrder);
+        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.swapXY);
         tiles.push({ x: x, y: y, rawUrl: rawUrl, url: "/api/tile-proxy?url=" + encodeURIComponent(rawUrl), label: "x=" + x + " y=" + y });
       }
     }
@@ -177,7 +177,7 @@ export default function EditorTab() {
         }
         var key = tileKey(idx, x, y);
         if (bank[key]) { done++; setLoadProgress(Math.round(((done + failed) / total) * 100)); continue; }
-        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.coordOrder);
+        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.swapXY);
         var dataUrl = await loadImgAsDataUrl("/api/tile-proxy?url=" + encodeURIComponent(rawUrl));
         if (dataUrl) { bank[key] = dataUrl; done++; } else failed++;
         setLoadProgress(Math.round(((done + failed) / total) * 100));
@@ -303,10 +303,7 @@ export default function EditorTab() {
             <div><p style={S.ml}>MaxY</p><input type="number" value={src.maxY} onChange={function(e){updateSource(idx, "maxY", +e.target.value)}} style={S.si} /></div>
           </div>
           <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginTop: 8}}>
-            <div><p style={S.ml}>Order</p><button onClick={function(){
-              var i = COORD_ORDERS.indexOf(src.coordOrder);
-              updateSource(idx, "coordOrder", COORD_ORDERS[(i + 1) % COORD_ORDERS.length]);
-            }} style={Object.assign({}, S.toggle, {background: src.coordOrder !== "zxy" ? "#d97706" : "#333"})}>{src.coordOrder.toUpperCase()}</button></div>
+            <div><p style={S.ml}>Swap XY</p><button onClick={toggleSrc("swapXY")} style={Object.assign({}, S.toggle, {background: src.swapXY ? "#d97706" : "#333"})}>{src.swapXY ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Transpose</p><button onClick={toggleSrc("transpose")} style={Object.assign({}, S.toggle, {background: src.transpose ? "#d97706" : "#333"})}>{src.transpose ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip X</p><button onClick={toggleSrc("flipX")} style={Object.assign({}, S.toggle, {background: src.flipX ? "#d97706" : "#333"})}>{src.flipX ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip Y</p><button onClick={toggleSrc("flipY")} style={Object.assign({}, S.toggle, {background: src.flipY ? "#d97706" : "#333"})}>{src.flipY ? "ON" : "OFF"}</button></div>

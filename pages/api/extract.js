@@ -52,11 +52,19 @@ export default async function handler(req, res) {
       toFetch.map((s) => fetchText(s))
     );
 
+    // Extract Leaflet/map config from source
+    const mapConfig = extractMapConfig(html);
     for (const result of jsResults) {
       if (result.status === "fulfilled" && result.value) {
         const r2 = extractPatterns(result.value);
         r2.patterns.forEach((p) => allPatterns.add(p));
         r2.tiles.forEach((t) => allTiles.add(t));
+        const cfg = extractMapConfig(result.value);
+        if (cfg.tileLayerConfigs.length > 0) {
+          mapConfig.tileLayerConfigs.push(...cfg.tileLayerConfigs);
+        }
+        if (cfg.crs) mapConfig.crs = cfg.crs;
+        if (cfg.bounds) mapConfig.bounds = cfg.bounds;
       }
     }
 
@@ -71,6 +79,7 @@ export default async function handler(req, res) {
       tiles: [...allTiles].slice(0, 50),
       scriptsScanned: toFetch.length,
       sourceUrl: url,
+      mapConfig: mapConfig,
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -168,4 +177,67 @@ function derivePattern(tileUrl) {
     return m[1] + "{z}" + "/{x}" + "/{y}" + m[5] + m[6];
   }
   return null;
+}
+
+function extractMapConfig(text) {
+  var config = { tileLayerConfigs: [], crs: null, bounds: null, center: null, zoom: null };
+
+  // L.tileLayer("url", { options }) — capture URL and options block
+  var tlRe = /(?:L\.)?tileLayer\s*\(\s*["'`]([^"'`]+)["'`]\s*,?\s*(\{[^}]{0,2000}\})?/gi;
+  var m;
+  while ((m = tlRe.exec(text)) !== null) {
+    var entry = { url: m[1], tms: false, minZoom: null, maxZoom: null, zoomOffset: null, bounds: null };
+    if (m[2]) {
+      var opts = m[2];
+      var tmsM = opts.match(/tms\s*:\s*(true|!0)/i);
+      if (tmsM) entry.tms = true;
+      var minZ = opts.match(/minZoom\s*:\s*(\d+)/);
+      if (minZ) entry.minZoom = parseInt(minZ[1]);
+      var maxZ = opts.match(/maxZoom\s*:\s*(\d+)/);
+      if (maxZ) entry.maxZoom = parseInt(maxZ[1]);
+      var zOff = opts.match(/zoomOffset\s*:\s*([-]?\d+)/);
+      if (zOff) entry.zoomOffset = parseInt(zOff[1]);
+      var tileSz = opts.match(/tileSize\s*:\s*(\d+)/);
+      if (tileSz) entry.tileSize = parseInt(tileSz[1]);
+      // bounds: [[lat,lng],[lat,lng]]
+      var bM = opts.match(/bounds\s*:\s*\[\s*\[\s*([-.\d]+)\s*,\s*([-.\d]+)\s*\]\s*,\s*\[\s*([-.\d]+)\s*,\s*([-.\d]+)\s*\]\s*\]/);
+      if (bM) entry.bounds = [[parseFloat(bM[1]), parseFloat(bM[2])], [parseFloat(bM[3]), parseFloat(bM[4])]];
+    }
+    config.tileLayerConfigs.push(entry);
+  }
+
+  // CRS detection
+  var crsRe = /(?:crs|CRS)\s*[:=]\s*(?:L\.CRS\.)?(EPSG\d+|Simple|Earth)/gi;
+  var crsM = crsRe.exec(text);
+  if (crsM) config.crs = crsM[1];
+
+  // Also check for L.CRS.Simple (common in game maps)
+  if (!config.crs && text.match(/CRS\.Simple|crs:\s*["']Simple/i)) config.crs = "Simple";
+
+  // setView or center
+  var viewRe = /setView\s*\(\s*\[\s*([-.\d]+)\s*,\s*([-.\d]+)\s*\]\s*,\s*(\d+)/g;
+  var viewM = viewRe.exec(text);
+  if (viewM) {
+    config.center = [parseFloat(viewM[1]), parseFloat(viewM[2])];
+    config.zoom = parseInt(viewM[3]);
+  }
+
+  // maxBounds
+  var maxBRe = /maxBounds\s*:\s*\[\s*\[\s*([-.\d]+)\s*,\s*([-.\d]+)\s*\]\s*,\s*\[\s*([-.\d]+)\s*,\s*([-.\d]+)\s*\]\s*\]/g;
+  var maxBM = maxBRe.exec(text);
+  if (maxBM) config.bounds = [[parseFloat(maxBM[1]), parseFloat(maxBM[2])], [parseFloat(maxBM[3]), parseFloat(maxBM[4])]];
+
+  // Map dimensions/resolution (common in game maps)
+  var dimRe = /(?:mapSize|imageSize|resolution|mapResolution)\s*[:=]\s*\[\s*(\d+)\s*,\s*(\d+)\s*\]/gi;
+  var dimM = dimRe.exec(text);
+  if (dimM) config.mapSize = [parseInt(dimM[1]), parseInt(dimM[2])];
+
+  // Minified tms patterns: tms:!0 or tms:true
+  if (!config.tileLayerConfigs.some(function(c) { return c.tms; })) {
+    if (text.match(/tms\s*[:=]\s*(?:true|!0)/i)) {
+      config.globalTms = true;
+    }
+  }
+
+  return config;
 }
