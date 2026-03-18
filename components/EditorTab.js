@@ -10,18 +10,17 @@ function buildUrl(pat, z, x, y, order) {
   return pat.replace("{z}", v[o[0]]).replace("{x}", v[o[1]]).replace("{y}", v[o[2]]);
 }
 function tileKey(src, x, y) { return src + ":" + x + "," + y; }
-function loadImgAsDataUrl(src) {
+
+// Store tiles as blob URLs — keeps original format (webp/jpg), no re-encoding
+function loadTileAsBlob(src) {
   return new Promise(function(res) {
-    var img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = function() {
-      var c = document.createElement("canvas");
-      c.width = img.naturalWidth; c.height = img.naturalHeight;
-      c.getContext("2d").drawImage(img, 0, 0);
-      try { res(c.toDataURL("image/png")); } catch(e) { res(null); }
-    };
-    img.onerror = function() { res(null); };
-    img.src = src;
+    fetch(src).then(function(r) {
+      if (!r.ok) { res(null); return; }
+      return r.blob();
+    }).then(function(blob) {
+      if (!blob || blob.size < 200) { res(null); return; }
+      res({ blobUrl: URL.createObjectURL(blob), size: blob.size });
+    }).catch(function() { res(null); });
   });
 }
 function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
@@ -101,7 +100,9 @@ export default function EditorTab() {
   }
   function removeSource(idx) {
     var bank = bankRef.current;
-    Object.keys(bank).forEach(function(k) { if (k.startsWith(idx + ":")) delete bank[k]; });
+    Object.keys(bank).forEach(function(k) {
+      if (k.startsWith(idx + ":")) { try { URL.revokeObjectURL(bank[k]); } catch(e){} delete bank[k]; }
+    });
     setGrid(function(old) { return old.map(function(cell) { return cell && cell.srcIdx === idx ? null : cell; }); });
     setSources(function(prev) { var n = prev.slice(); n.splice(idx, 1); return n; });
     if (activeSrc >= sources.length - 1) setActiveSrc(Math.max(0, sources.length - 2));
@@ -159,16 +160,14 @@ export default function EditorTab() {
     setSrcPreview({ rows: rows, srcIdx: idx });
   }
 
+  // Track actual memory usage
+  var bankSizeRef = useRef(0);
+
   // --- LOAD WITH ABORT ---
   async function loadSource(idx) {
     var src = sources[idx];
     if (!src.pattern || loadingSrc) return;
     var cols = src.maxX - src.minX + 1, rows = src.maxY - src.minY + 1, total = cols * rows;
-    // Memory warning: ~50KB per tile as dataURL, warn above 500 tiles
-    if (total > 500) {
-      var estMB = Math.round(total * 50 / 1024);
-      if (!confirm("Loading " + total + " tiles (~" + estMB + "MB memory). Continue?")) return;
-    }
     abortRef.current = false;
     setLoadingSrc(true); setLoadProgress(0);
     var bank = bankRef.current;
@@ -177,23 +176,28 @@ export default function EditorTab() {
     for (var y = src.minY; y <= src.maxY; y++) {
       for (var x = src.minX; x <= src.maxX; x++) {
         if (abortRef.current) {
-          setLoadStatus("Stopped! " + done + " loaded, " + failed + " failed, " + (total - done - failed) + " skipped");
+          setLoadStatus("Stopped! " + done + "/" + total + " (" + failed + " failed) | " + formatMB(bankSizeRef.current));
           setLoadingSrc(false); rebuildPalette(); return;
         }
         var key = tileKey(idx, x, y);
         if (bank[key]) { done++; setLoadProgress(Math.round(((done + failed) / total) * 100)); continue; }
         var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.swapXY);
-        var dataUrl = await loadImgAsDataUrl("/api/tile-proxy?url=" + encodeURIComponent(rawUrl));
-        if (dataUrl) { bank[key] = dataUrl; done++; } else failed++;
+        var result = await loadTileAsBlob("/api/tile-proxy?url=" + encodeURIComponent(rawUrl));
+        if (result) { bank[key] = result.blobUrl; bankSizeRef.current += result.size; done++; }
+        else failed++;
         setLoadProgress(Math.round(((done + failed) / total) * 100));
-        setLoadStatus("Loading: " + (done + failed) + "/" + total + " (" + failed + " failed)");
-        await wait(150);
+        if ((done + failed) % 10 === 0 || done + failed === total) {
+          setLoadStatus("Loading: " + (done + failed) + "/" + total + " (" + failed + " failed) | " + formatMB(bankSizeRef.current));
+        }
+        await wait(100);
       }
     }
     rebuildPalette();
-    setLoadStatus("Loaded " + done + "/" + total + (failed > 0 ? " (" + failed + " failed)" : " - all OK!"));
+    setLoadStatus("Loaded " + done + "/" + total + (failed > 0 ? " (" + failed + " failed)" : "") + " | " + formatMB(bankSizeRef.current));
     setLoadingSrc(false);
   }
+
+  function formatMB(bytes) { return (bytes / (1024 * 1024)).toFixed(1) + "MB"; }
 
   function stopLoading() { abortRef.current = true; }
 
@@ -271,7 +275,14 @@ export default function EditorTab() {
   }
 
   function clearGrid() { setGrid(new Array(gridW * gridH).fill(null)); setSwapFirst(null); }
-  function clearBank() { bankRef.current = {}; setPaletteTiles([]); setSelected(null); setLoadStatus("Bank cleared — all tiles freed from memory"); }
+  function clearBank() {
+    var bank = bankRef.current;
+    Object.keys(bank).forEach(function(k) { try { URL.revokeObjectURL(bank[k]); } catch(e){} });
+    bankRef.current = {};
+    bankSizeRef.current = 0;
+    setPaletteTiles([]); setSelected(null);
+    setLoadStatus("Bank cleared — all blob URLs revoked");
+  }
   function toggleSrc(field) { return function() { setSources(function(prev) { var n = prev.slice(); n[activeSrc] = Object.assign({}, n[activeSrc]); n[activeSrc][field] = !n[activeSrc][field]; return n; }); }; }
   var visiblePalette = paletteFilter === -1 ? paletteTiles : paletteTiles.filter(function(t) { return t.srcIdx === paletteFilter; });
   var filledCount = grid.filter(function(c2) { return c2 !== null; }).length;
@@ -347,7 +358,7 @@ export default function EditorTab() {
     {/* PALETTE */}
     {paletteTiles.length > 0 && <div style={S.card}>
       <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6}}>
-        <p style={S.sec}>{"Palette (" + paletteTiles.length + " | ~" + Math.round(paletteTiles.length * 50 / 1024) + "MB)"}</p>
+        <p style={S.sec}>{"Palette (" + paletteTiles.length + " tiles | " + formatMB(bankSizeRef.current) + ")"}</p>
         <div style={{display: "flex", gap: 3}}>
           <button onClick={function(){setPaletteFilter(-1)}} style={Object.assign({}, S.sm, paletteFilter === -1 ? {background: "#555"} : {})}>All</button>
           {sources.map(function(src, i) { return <button key={i} onClick={function(){setPaletteFilter(i)}} style={Object.assign({}, S.sm, paletteFilter === i ? {background: src.color} : {})}>{src.name ? src.name.substring(0, 3) : "S" + (i + 1)}</button>; })}
