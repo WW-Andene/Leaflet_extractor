@@ -32,6 +32,8 @@ export default function Home() {
   const [stitching, setStitching] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [useProxy, setUseProxy] = useState(true);
+  const [flipY, setFlipY] = useState(false);
+  const [flipX, setFlipX] = useState(false);
   const [probeImg, setProbeImg] = useState(null);
   const [probing, setProbing] = useState(false);
   const [probeResults, setProbeResults] = useState(null);
@@ -134,7 +136,11 @@ export default function Home() {
       await Promise.all(b.map(async ({ x, y }) => {
         const u = proxied(buildUrl(tilePattern, zoom, x, y));
         const img = await loadImg(u);
-        if (img) { ctx.drawImage(img, (x - minX) * tileSize, (y - minY) * tileSize, tileSize, tileSize); done++; }
+        if (img) {
+          const px = (flipX ? (maxX - x) : (x - minX)) * tileSize;
+          const py = (flipY ? (maxY - y) : (y - minY)) * tileSize;
+          ctx.drawImage(img, px, py, tileSize, tileSize); done++;
+        }
         else fail++;
       }));
       setStitchProgress(Math.round(((i + b.length) / all.length) * 100));
@@ -228,6 +234,11 @@ export default function Home() {
             <div><p style={S.ml}>Zoom</p><input type="number" value={zoom} onChange={e => setZoom(+e.target.value)} style={S.si} /></div>
             <div><p style={S.ml}>Tile px</p><input type="number" value={tileSize} onChange={e => setTileSize(+e.target.value)} style={S.si} /></div>
             <div><p style={S.ml}>Proxy</p><button onClick={() => setUseProxy(!useProxy)} style={{...S.si, background: useProxy ? "#059669" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"}}>{useProxy ? "ON" : "OFF"}</button></div>
+          </div>
+          <div style={S.g3}>
+            <div><p style={S.ml}>Flip Y (TMS)</p><button onClick={() => setFlipY(!flipY)} style={{...S.si, background: flipY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"}}>{flipY ? "ON" : "OFF"}</button></div>
+            <div><p style={S.ml}>Flip X</p><button onClick={() => setFlipX(!flipX)} style={{...S.si, background: flipX ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"}}>{flipX ? "ON" : "OFF"}</button></div>
+            <div></div>
           </div>
           <div style={S.g4}>
             <div><p style={S.ml}>Min X</p><input type="number" value={minX} onChange={e => setMinX(+e.target.value)} style={S.si} /></div>
