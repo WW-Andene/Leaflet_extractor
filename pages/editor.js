@@ -6,10 +6,10 @@ import { useState, useRef, useCallback } from "react";
   - Supports standard {z}/{x}/{y} and appsample {z}/tile-{x}_{y} formats
   - Tiles stored as dataURLs (persist across source switches)
   - Place, pick, swap, duplicate, erase on editor grid
-  - Grid up to 32x32 tiles = 8192x8192px max at 256px/tile
+  - Max 8192 total tiles in editor grid
 */
 
-var MAX_GRID = 32; // 32*256 = 8192px
+var MAX_TILES = 8192; // max total tiles in editor grid
 
 function buildUrl(pat, z, x, y, swapXY) {
   if (swapXY) return pat.replace("{z}", z).replace("{x}", y).replace("{y}", x);
@@ -110,8 +110,9 @@ export default function Editor() {
 
   // Resize grid preserving content
   function resizeGrid(newW, newH) {
-    var w = Math.min(Math.max(newW, 1), MAX_GRID);
-    var h = Math.min(Math.max(newH, 1), MAX_GRID);
+    var w = Math.max(newW, 1);
+    var h = Math.max(newH, 1);
+    if (w * h > MAX_TILES) return; // over limit, reject
     setGrid(function(old) {
       var oldW = gridW;
       var ng = new Array(w * h).fill(null);
@@ -223,8 +224,9 @@ export default function Editor() {
     var bank = bankRef.current;
     var cols = src.maxX - src.minX + 1;
     var rows = src.maxY - src.minY + 1;
-    var newW = Math.min(Math.max(gridW, cols), MAX_GRID);
-    var newH = Math.min(Math.max(gridH, rows), MAX_GRID);
+    var newW = Math.max(gridW, cols);
+    var newH = Math.max(gridH, rows);
+    if (newW * newH > MAX_TILES) { newW = cols; newH = rows; } // fit source at minimum
     setGrid(function(old) {
       var oldW = gridW;
       var ng = new Array(newW * newH).fill(null);
@@ -297,13 +299,10 @@ export default function Editor() {
 
   // Download
   function downloadGrid() {
-    var tSize = sources[0] ? sources[0].tileSize : 256;
+    var tSize = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
     var W = gridW * tSize;
     var H = gridH * tSize;
-    if (W > 8192 || H > 8192) {
-      setDlStatus("Exceeds 8192px! Reduce grid size.");
-      return;
-    }
+    if (gridW * gridH > MAX_TILES) { setDlStatus("Exceeds " + MAX_TILES + " tiles! Reduce grid."); return; }
     setDlStatus("Rendering " + W + "x" + H + "px...");
     var c = document.createElement("canvas");
     c.width = W; c.height = H;
@@ -364,7 +363,7 @@ export default function Editor() {
         <h1 style={S.h1}>Tile Editor</h1>
         <a href="/" style={{fontSize: "0.72rem", color: "#3b82f6", textDecoration: "none"}}>{"< Back"}</a>
       </div>
-      <p style={S.sub}>Load tiles from multiple sources, compose and download (max 8192x8192px)</p>
+      <p style={S.sub}>{"Multi-source tile compositor (max " + MAX_TILES + " tiles)"}</p>
 
       {/* === SOURCES === */}
       <div style={S.card}>
@@ -439,7 +438,7 @@ export default function Editor() {
             </div>
 
             <p style={{fontSize: "0.68rem", color: "#666", marginTop: 4}}>
-              {cols + "x" + rows + " = " + (cols * rows) + " tiles | " + (cols * 256) + "x" + (rows * 256) + "px"}
+              {cols + "x" + rows + " = " + (cols * rows) + " tiles | " + (cols * src.tileSize) + "x" + (rows * src.tileSize) + "px"}
             </p>
 
             <div style={{display: "flex", gap: 4, marginTop: 8}}>
@@ -505,7 +504,7 @@ export default function Editor() {
           <span style={{color: "#555"}}>x</span>
           <input type="number" value={gridH} onChange={function(e){resizeGrid(gridW, +e.target.value)}}
             style={Object.assign({}, S.si, {width: 55})} />
-          <p style={{fontSize: "0.65rem", color: "#666"}}>{"= " + (gridW * 256) + "x" + (gridH * 256) + "px"}</p>
+          <p style={{fontSize: "0.6rem", color: "#666"}}>{"= " + (gridW * gridH) + "/" + MAX_TILES + " tiles"}</p>
         </div>
 
         <div style={{display: "flex", gap: 6, alignItems: "center"}}>
@@ -562,7 +561,7 @@ export default function Editor() {
           {"5. Pick = grab a tile from grid to duplicate elsewhere"}<br/>
           {"6. Swap = tap two cells to exchange them"}<br/>
           {"7. Erase = clear a cell"}<br/>
-          {"8. Download PNG (max 8192x8192px = 32x32 tiles at 256px)"}
+          {"7. Download PNG (max " + MAX_TILES + " tiles)"}
         </p>
       </div>
     </div>
