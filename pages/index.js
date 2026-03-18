@@ -55,9 +55,22 @@ export default function Home() {
       var d = await r.json();
       if (d.error) setStatus("Error: " + d.error);
       else {
-        setStatus("Found " + d.patterns.length + " pattern(s), " + d.tiles.length + " tile(s)");
+        var msg = "Found " + d.patterns.length + " pattern(s), " + d.tiles.length + " tile(s)";
         setResults(d);
         if (d.patterns.length > 0) setTilePattern(d.patterns[0]);
+        // Auto-apply Leaflet config
+        if (d.mapConfig) {
+          var mc = d.mapConfig;
+          var tlc = mc.tileLayerConfigs && mc.tileLayerConfigs[0];
+          if (tlc) {
+            if (tlc.tms || mc.globalTms) { setFlipY(true); msg += " | TMS detected: Flip Y ON"; }
+            if (tlc.minZoom != null) msg += " | minZ=" + tlc.minZoom;
+            if (tlc.maxZoom != null) msg += " | maxZ=" + tlc.maxZoom;
+            if (tlc.url) setTilePattern(tlc.url);
+          }
+          if (mc.crs) msg += " | CRS=" + mc.crs;
+        }
+        setStatus(msg);
       }
     } catch (e) { setStatus("Error: " + e.message); }
     setLoading(false);
