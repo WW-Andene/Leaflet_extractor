@@ -5,6 +5,10 @@
     },
     "pages/api/extract.js": {
       "maxDuration": 30
+    },
+    "pages/api/render.js": {
+      "maxDuration": 60,
+      "memory": 1024
     }
   }
 }

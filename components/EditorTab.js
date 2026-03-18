@@ -321,7 +321,8 @@ export default function EditorTab() {
   async function downloadGrid() {
     var tSize = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
     var scale = dlScale;
-    var scaledTile = Math.round(tSize * scale);
+    var fmt = dlFormat;
+
     // Find bounding box
     var bMinX = gridW, bMaxX = 0, bMinY = gridH, bMaxY = 0;
     var filled = [];
@@ -330,67 +331,70 @@ export default function EditorTab() {
         var gx = i % gridW, gy = Math.floor(i / gridW);
         if (gx < bMinX) bMinX = gx; if (gx > bMaxX) bMaxX = gx;
         if (gy < bMinY) bMinY = gy; if (gy > bMaxY) bMaxY = gy;
-        filled.push({ idx: i, cell: grid[i], gx: gx, gy: gy });
+        filled.push({ cell: grid[i], gx: gx, gy: gy });
       }
     }
     if (filled.length === 0) { setDlStatus("Grid is empty!"); return; }
+
     var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
+    var scaledTile = Math.round(tSize * scale);
     var W = cropW * scaledTile, H = cropH * scaledTile;
-    // Browser canvas limits: ~16384px per side, ~268M total pixels
-    var maxSide = 16384;
-    var maxPixels = 268000000;
-    var actualScale = scale;
-    if (W > maxSide || H > maxSide || W * H > maxPixels) {
-      // Auto-reduce scale to fit
-      var fitScale = Math.min(maxSide / (cropW * tSize), maxSide / (cropH * tSize), Math.sqrt(maxPixels / (cropW * tSize * cropH * tSize)));
-      actualScale = Math.floor(fitScale * 10) / 10; // round down to 0.1
-      if (actualScale < 0.1) actualScale = 0.1;
-      scaledTile = Math.round(tSize * actualScale);
-      W = cropW * scaledTile; H = cropH * scaledTile;
-      setDlStatus("Scale " + scale + "x too large (" + (cropW * Math.round(tSize * scale)) + "x" + (cropH * Math.round(tSize * scale)) + "px). Auto-reduced to " + actualScale + "x (" + W + "x" + H + "px)...");
-      await wait(100);
-    }
-    var fmt = dlFormat;
-    var ext = fmt === "jpeg" ? "jpg" : "png";
-    setDlStatus("Rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + ")...");
 
-    var c = document.createElement("canvas"); c.width = W; c.height = H;
-    var ctx = c.getContext("2d");
-    if (!ctx) { setDlStatus("Canvas " + W + "x" + H + "px failed — try lower scale"); return; }
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-
-    // Render tiles in batches of 20 for progress updates
-    for (var b = 0; b < filled.length; b += 20) {
-      var batch = filled.slice(b, b + 20);
-      await Promise.all(batch.map(function(t) {
-        return new Promise(function(res) {
-          var img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = function() {
-            ctx.drawImage(img, (t.gx - bMinX) * scaledTile, (t.gy - bMinY) * scaledTile, scaledTile, scaledTile);
-            res();
-          };
-          img.onerror = function() { res(); };
-          img.src = t.cell.dataUrl;
-        });
-      }));
-      setDlStatus("Rendering: " + Math.min(b + 20, filled.length) + "/" + filled.length + " tiles...");
+    // Build tile list with original coordinates for server
+    var tileList = [];
+    for (var j = 0; j < filled.length; j++) {
+      var f = filled[j];
+      var c = f.cell;
+      tileList.push({
+        srcIdx: c.srcIdx || 0,
+        x: c.ox, y: c.oy,
+        gx: f.gx - bMinX, gy: f.gy - bMinY,
+      });
     }
 
-    setDlStatus("Encoding " + fmt.toUpperCase() + "...");
-    // Small delay to let UI update before heavy encode
-    await wait(50);
+    // Build patterns array from sources
+    var pats = sources.map(function(src) {
+      return { pattern: src.pattern, zoom: src.zoom, swapXY: src.swapXY };
+    });
 
-    var mimeType = fmt === "jpeg" ? "image/jpeg" : "image/png";
-    var quality = fmt === "jpeg" ? 0.92 : undefined;
-    c.toBlob(function(blob) {
-      if (!blob) { setDlStatus("Render failed — canvas too large?"); return; }
+    setDlStatus("Server rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + " " + scale + "x)...");
+
+    try {
+      var resp = await fetch("/api/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          patterns: pats,
+          tiles: tileList,
+          tileSize: tSize,
+          scale: scale,
+          cropW: cropW,
+          cropH: cropH,
+          format: fmt,
+          quality: 92,
+        }),
+      });
+
+      if (!resp.ok) {
+        var err = "";
+        try { var ej = await resp.json(); err = ej.error || resp.status; } catch(e) { err = resp.status; }
+        setDlStatus("Server error: " + err);
+        return;
+      }
+
+      var blob = await resp.blob();
       var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
-      var dl = document.createElement("a"); var blobUrl = URL.createObjectURL(blob); dl.href = blobUrl;
-      dl.download = "tilemap_" + W + "x" + H + "." + ext; dl.click();
+      var ext = fmt === "jpeg" ? "jpg" : "png";
+      var blobUrl = URL.createObjectURL(blob);
+      var dl = document.createElement("a");
+      dl.href = blobUrl;
+      dl.download = "tilemap_" + W + "x" + H + "." + ext;
+      dl.click();
       setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
-      setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase());
-    }, mimeType, quality);
+      setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase() + " (" + filled.length + " tiles)");
+    } catch (e) {
+      setDlStatus("Render failed: " + e.message);
+    }
   }
 
   function clearGrid() { setGrid(new Array(GRID_W * GRID_H).fill(null)); setSwapFirst(null); }
@@ -562,7 +566,7 @@ export default function EditorTab() {
             style={Object.assign({}, S.sm, dlFormat === f ? {background: "#3b82f6"} : {})}>{f.toUpperCase()}</button>;
         })}
         <p style={{fontSize: "0.72rem", color: "#888", marginLeft: 8}}>Scale:</p>
-        {[0.5, 1, 2].map(function(sc) {
+        {[0.5, 1, 2, 3, 4].map(function(sc) {
           return <button key={sc} onClick={function(){setDlScale(sc)}}
             style={Object.assign({}, S.sm, dlScale === sc ? {background: "#3b82f6"} : {})}>{sc + "x"}</button>;
         })}
@@ -579,9 +583,10 @@ export default function EditorTab() {
         var ts = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
         var ow = (bMxX - bMnX + 1) * Math.round(ts * dlScale);
         var oh = (bMxY - bMnY + 1) * Math.round(ts * dlScale);
-        var warn = ow > 16384 || oh > 16384;
-        return <p style={{fontSize: "0.65rem", color: warn ? "#f59e0b" : "#666", marginTop: 4, marginBottom: 8}}>
-          {"Output: " + ow + "x" + oh + "px (" + cnt + " tiles)" + (warn ? " — may exceed canvas limit, will auto-reduce" : "")}
+        var warn = ow > 30000 || oh > 30000;
+        var slow = cnt > 1000;
+        return <p style={{fontSize: "0.65rem", color: warn ? "#ef4444" : slow ? "#f59e0b" : "#666", marginTop: 4, marginBottom: 8}}>
+          {"Output: " + ow + "x" + oh + "px (" + cnt + " tiles, server render)" + (warn ? " — exceeds 30000px limit" : "") + (slow && !warn ? " — large, may take 30-60s" : "")}
         </p>;
       })()}
       <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
