@@ -1,13 +1,7 @@
 {
   "functions": {
-    "pages/api/headless.js": {
-      "maxDuration": 60,
-      "memory": 1024
-    }
-  },
-  "build": {
-    "env": {
-      "AWS_LAMBDA_JS_RUNTIME": "nodejs22.x"
+    "pages/api/probe.js": {
+      "maxDuration": 30
     }
   }
 }

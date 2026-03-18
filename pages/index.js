@@ -10,17 +10,6 @@ const PRESETS = [
   { label: "TH.GL", url: "https://wuthering.th.gl/maps/Overworld" },
 ];
 
-const KNOWN_MAPS = [
-  { id: "AkiWorld_WP", label: "Overworld (Huanglong+)" },
-  { id: "WP_Xueyuan", label: "Xueyuan" },
-  { id: "WP_2_8_Cafe", label: "Cafe (2.8)" },
-  { id: "WP_2_8_Suibo", label: "Suibo (2.8)" },
-  { id: "WP_HDSYC", label: "HDSYC" },
-  { id: "WP_DianDaoTa2", label: "DianDaoTa2" },
-  { id: "WP_HHA_Underground", label: "HHA Underground" },
-  { id: "WP_JK_Underground", label: "JK Underground" },
-];
-
 export default function Home() {
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
@@ -30,6 +19,7 @@ export default function Home() {
   const [tab, setTab] = useState("extract");
 
   // Stitch state
+  const [sampleTileUrl, setSampleTileUrl] = useState("");
   const [tilePattern, setTilePattern] = useState("");
   const [zoom, setZoom] = useState(3);
   const [minX, setMinX] = useState(0);
@@ -44,27 +34,19 @@ export default function Home() {
   const [useProxy, setUseProxy] = useState(true);
   const [probeImg, setProbeImg] = useState(null);
   const [probing, setProbing] = useState(false);
-  const [selectedMap, setSelectedMap] = useState("AkiWorld_WP");
-  const [jsFindings, setJsFindings] = useState([]);
-  const [headlessUrl, setHeadlessUrl] = useState("https://wuthering.th.gl/maps/Overworld");
-  const [headlessZoom, setHeadlessZoom] = useState(5);
-  const [headlessLoading, setHeadlessLoading] = useState(false);
-  const [headlessStatus, setHeadlessStatus] = useState("");
-  const [headlessResults, setHeadlessResults] = useState(null);
+  const [probeResults, setProbeResults] = useState(null);
 
   // --- EXTRACT ---
   async function extract() {
     if (!url) return;
     setLoading(true); setResults(null);
-    setStatus("Fetching & scanning...");
+    setStatus("Fetching & scanning JS bundles...");
     try {
       const r = await fetch("/api/extract?url=" + encodeURIComponent(url));
       const d = await r.json();
       if (d.error) setStatus("Error: " + d.error);
       else {
-        setStatus(d.patterns.length + d.tiles.length > 0
-          ? "Found " + d.patterns.length + " pattern(s), " + d.tiles.length + " tile(s)"
-          : "No tiles found.");
+        setStatus("Found " + d.patterns.length + " pattern(s), " + d.tiles.length + " tile(s)");
         setResults(d);
         if (d.patterns.length > 0) setTilePattern(d.patterns[0]);
       }
@@ -72,56 +54,36 @@ export default function Home() {
     setLoading(false);
   }
 
-  function copyAll() {
-    if (!results) return;
-    let t = results.patterns.join("\n") + "\n" + results.tiles.join("\n");
-    navigator.clipboard.writeText(t).catch(() => {});
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
-  }
-
-  // --- AUTO PROBE CDN ---
-  async function autoProbe() {
-    setProbing(true); setProbeImg(null); setJsFindings([]);
-    setStitchStatus("Probing CDN + scanning JS for " + selectedMap + "... (may take 30-60s)");
+  // --- PASTE ONE TILE URL → auto-detect everything ---
+  async function detectFromSample() {
+    if (!sampleTileUrl) return;
+    setProbing(true); setProbeImg(null); setProbeResults(null);
+    setStitchStatus("Analyzing tile URL & finding bounds...");
     try {
-      const r = await fetch("/api/probe?mapId=" + encodeURIComponent(selectedMap));
+      const r = await fetch("/api/probe?sampleTile=" + encodeURIComponent(sampleTileUrl));
       const d = await r.json();
-      if (d.jsFindings && d.jsFindings.length > 0) setJsFindings(d.jsFindings);
-      if (d.working && d.working.length > 0) {
-        const w = d.working[0];
-        setTilePattern(w.pattern);
-        setStitchStatus("Found! " + w.pattern + " (" + w.contentLength + " bytes, z=" + w.z + ")");
-        setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(w.testedUrl));
+      setProbeResults(d);
+      if (d.success) {
+        setTilePattern(d.pattern);
+        setZoom(d.detectedZoom);
+        setMinX(0); setMinY(0);
+        setMaxX(d.bounds.maxX);
+        setMaxY(d.bounds.maxY);
+        setStitchStatus("Pattern: " + d.pattern + " | Zoom " + d.detectedZoom + " | " + (d.bounds.maxX + 1) + "x" + (d.bounds.maxY + 1) + " tiles");
+        // Show probe image
+        const testUrl = d.pattern.replace("{z}", d.detectedZoom).replace("{x}", d.detectedX).replace("{y}", d.detectedY);
+        setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(testUrl));
       } else {
-        setStitchStatus("No tile match after " + d.totalTested + " URLs." + (d.jsFindings.length ? " Found " + d.jsFindings.length + " CDN refs in JS!" : ""));
+        setStitchStatus("Could not detect pattern: " + (d.error || "unknown"));
       }
     } catch (e) {
-      setStitchStatus("Probe error: " + e.message);
+      setStitchStatus("Error: " + e.message);
     }
     setProbing(false);
   }
 
-  // --- HEADLESS BROWSER ---
-  async function runHeadless() {
-    setHeadlessLoading(true); setHeadlessResults(null);
-    setHeadlessStatus("Launching headless Chrome on server...");
-    try {
-      const r = await fetch("/api/headless?url=" + encodeURIComponent(headlessUrl) + "&maxZoom=" + headlessZoom);
-      const d = await r.json();
-      if (d.success) {
-        setHeadlessResults(d);
-        setHeadlessStatus("Done! Found " + d.patterns.length + " patterns, " + d.totalTiles + " tiles across " + Object.keys(d.analysis.zooms).length + " zoom levels");
-      } else {
-        setHeadlessStatus("Error: " + d.error);
-      }
-    } catch (e) {
-      setHeadlessStatus("Error: " + e.message);
-    }
-    setHeadlessLoading(false);
-  }
-
   // --- STITCH ---
-  function tileUrl(pattern, z, x, y) {
+  function buildUrl(pattern, z, x, y) {
     return pattern.replace("{z}", z).replace("{x}", x).replace("{y}", y);
   }
   function loadImg(src) {
@@ -139,14 +101,14 @@ export default function Home() {
 
   async function testOneTile() {
     setProbeImg(null);
-    const u = proxied(tileUrl(tilePattern, zoom, minX, minY));
+    const u = proxied(buildUrl(tilePattern, zoom, minX, minY));
     setStitchStatus("Testing z=" + zoom + " x=" + minX + " y=" + minY + "...");
     const img = await loadImg(u);
     if (img) {
       setProbeImg(u);
       setStitchStatus("Tile OK! " + img.naturalWidth + "x" + img.naturalHeight + "px");
     } else {
-      setStitchStatus("Failed. Try Auto Probe or check pattern.");
+      setStitchStatus("Failed. Check pattern/bounds.");
     }
   }
 
@@ -168,7 +130,7 @@ export default function Home() {
     for (let i = 0; i < all.length; i += batch) {
       const b = all.slice(i, i + batch);
       await Promise.all(b.map(async ({ x, y }) => {
-        const u = proxied(tileUrl(tilePattern, zoom, x, y));
+        const u = proxied(buildUrl(tilePattern, zoom, x, y));
         const img = await loadImg(u);
         if (img) { ctx.drawImage(img, (x - minX) * tileSize, (y - minY) * tileSize, tileSize, tileSize); done++; }
         else fail++;
@@ -176,7 +138,7 @@ export default function Home() {
       setStitchProgress(Math.round(((i + b.length) / all.length) * 100));
       setStitchStatus((done + fail) + "/" + total + " (" + fail + " failed)");
     }
-    setStitchStatus("Done! " + done + " loaded, " + fail + " failed. " + W + "x" + H + "px");
+    setStitchStatus("Done! " + done + "/" + total + " tiles. " + W + "x" + H + "px");
     c.toBlob(blob => { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
     setStitching(false);
   }
@@ -184,7 +146,7 @@ export default function Home() {
   return (
     <div style={S.wrap}>
       <h1 style={S.h1}>Leaflet Tile Extractor</h1>
-      <p style={S.sub}>Extract tile URLs + stitch full maps</p>
+      <p style={S.sub}>Extract tile URLs → stitch full maps</p>
 
       <div style={S.tabs}>
         <button style={{...S.tab, ...(tab === "extract" ? S.tabOn : {})}} onClick={() => setTab("extract")}>Extract</button>
@@ -193,7 +155,7 @@ export default function Home() {
 
       {tab === "extract" && <>
         <div style={S.card}>
-          <div style={S.presets}>{PRESETS.map(p => (
+          <div style={S.chips}>{PRESETS.map(p => (
             <button key={p.url} onClick={() => setUrl(p.url)} style={{...S.chip, ...(url === p.url ? S.chipOn : {})}}>{p.label}</button>
           ))}</div>
           <input value={url} onChange={e => setUrl(e.target.value)} placeholder="Map URL..." style={S.input} />
@@ -210,115 +172,55 @@ export default function Home() {
             <div style={{...S.mono, maxHeight: 160, overflowY: "auto"}}>{results.tiles.map((t, i) => <div key={i}>{t}</div>)}</div>
           </>}
           <div style={{display: "flex", gap: 8, marginTop: 10}}>
-            <button onClick={copyAll} style={{...S.btn, flex: 1, background: "#059669", color: "#fff"}}>{copied ? "Copied!" : "Copy"}</button>
-            <button onClick={() => { if (results.patterns[0]) setTilePattern(results.patterns[0]); setTab("stitch"); }} style={{...S.btn, flex: 1, background: "#7c3aed", color: "#fff"}}>Stitch →</button>
+            <button onClick={() => {
+              let t = (results.patterns || []).join("\n") + "\n" + (results.tiles || []).join("\n");
+              navigator.clipboard.writeText(t).catch(() => {});
+              setCopied(true); setTimeout(() => setCopied(false), 2000);
+            }} style={{...S.btn, flex: 1, background: "#059669", color: "#fff"}}>{copied ? "Copied!" : "Copy"}</button>
+            <button onClick={() => { if (results.patterns[0]) setTilePattern(results.patterns[0]); setTab("stitch"); }}
+              style={{...S.btn, flex: 1, background: "#7c3aed", color: "#fff"}}>Stitch →</button>
           </div>
         </div>}
       </>}
 
       {tab === "stitch" && <>
-        {/* HEADLESS BROWSER - THE REAL DEAL */}
+        {/* PASTE ONE TILE URL - THE EASY WAY */}
         <div style={{...S.card, borderColor: "#7c3aed"}}>
-          <p style={{...S.sec, color: "#a78bfa"}}>🚀 Headless Browser (Best Method)</p>
+          <p style={{...S.sec, color: "#a78bfa"}}>🎯 Paste One Tile URL</p>
           <p style={{fontSize: "0.72rem", color: "#888", marginBottom: 8}}>
-            Runs the actual map page in a headless Chrome on the server. Zooms through levels, intercepts all tile requests. Finds the real URLs.
+            Use extract.pics on a map site → find any 256x256 tile → copy its URL → paste here.
+            The app auto-detects the pattern and finds all tile bounds.
           </p>
-          <div style={S.presets}>
-            {[
-              { label: "TH.GL Overworld", url: "https://wuthering.th.gl/maps/Overworld" },
-              { label: "TH.GL Lahai-Roi", url: "https://wuthering.th.gl/maps/Lahai-Roi" },
-              { label: "Appsample Main", url: "https://wuthering-waves-map.appsample.com/" },
-              { label: "wuthering.gg", url: "https://wuthering.gg/map" },
-              { label: "wuthering.gg Rinascita", url: "https://wuthering.gg/map/rinascita" },
-            ].map(p => (
-              <button key={p.url} onClick={() => setHeadlessUrl(p.url)}
-                style={{...S.chip, ...(headlessUrl === p.url ? S.chipOn : {})}}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-          <div style={{display: "flex", gap: 8, marginTop: 8}}>
-            <input value={headlessUrl} onChange={e => setHeadlessUrl(e.target.value)}
-              placeholder="Map page URL..." style={{...S.input, flex: 1, marginBottom: 0}} />
-            <input type="number" value={headlessZoom} onChange={e => setHeadlessZoom(+e.target.value)}
-              style={{...S.si, width: 60}} placeholder="Zoom" />
-          </div>
-          <button onClick={runHeadless} disabled={headlessLoading}
-            style={{...S.btn, marginTop: 8, ...(headlessLoading ? S.off : {background: "#7c3aed", color: "#fff"})}}>
-            {headlessLoading ? "Running headless Chrome... (up to 60s)" : "🚀 Run Headless Browser"}
+          <input value={sampleTileUrl} onChange={e => setSampleTileUrl(e.target.value)}
+            placeholder="https://cdn.example.com/tiles/3/4/5.png" style={S.input} />
+          <button onClick={detectFromSample} disabled={probing || !sampleTileUrl}
+            style={{...S.btn, ...(probing ? S.off : {background: "#7c3aed", color: "#fff"})}}>
+            {probing ? "Detecting..." : "🎯 Auto-Detect Pattern & Bounds"}
           </button>
-          {headlessStatus && <p style={S.st}>{headlessStatus}</p>}
 
-          {headlessResults && <>
-            {headlessResults.patterns.length > 0 && <>
-              <p style={{...S.sec, marginTop: 12}}>✅ Tile Patterns ({headlessResults.patterns.length}):</p>
-              {headlessResults.patterns.map((p, i) => <div key={i} style={S.mono}>{p}</div>)}
-            </>}
-            {headlessResults.analysis && Object.keys(headlessResults.analysis.zooms).length > 0 && <>
-              <p style={{...S.sec, marginTop: 12}}>📊 Zoom Analysis:</p>
-              <div style={S.mono}>
-                {Object.entries(headlessResults.analysis.zooms).map(([z, info]) => (
-                  <div key={z}>z={z}: x=[{info.minX}-{info.maxX}] y=[{info.minY}-{info.maxY}] ({info.count} tiles)</div>
-                ))}
-                <div style={{marginTop: 4, color: "#fbbf24"}}>Max zoom found: {headlessResults.analysis.maxZoomFound}</div>
-              </div>
-            </>}
-            {headlessResults.tiles.length > 0 && <>
-              <p style={{...S.sec, marginTop: 12}}>🧩 Sample Tiles ({headlessResults.totalTiles} total):</p>
-              <div style={{...S.mono, maxHeight: 180, overflowY: "auto"}}>
-                {headlessResults.tiles.slice(0, 30).map((t, i) => <div key={i}>{t}</div>)}
-              </div>
-            </>}
-            <div style={{display: "flex", gap: 8, marginTop: 10}}>
-              <button onClick={() => {
-                const text = "PATTERNS:\n" + headlessResults.patterns.join("\n") + "\n\nTILES:\n" + headlessResults.tiles.join("\n");
-                navigator.clipboard.writeText(text).catch(() => {});
-              }} style={{...S.btn, flex: 1, background: "#059669", color: "#fff"}}>Copy</button>
-              <button onClick={() => {
-                if (headlessResults.patterns[0]) setTilePattern(headlessResults.patterns[0]);
-                if (headlessResults.analysis) {
-                  const maxZ = headlessResults.analysis.maxZoomFound;
-                  const zInfo = headlessResults.analysis.zooms[maxZ];
-                  if (zInfo) {
-                    setZoom(maxZ);
-                    setMinX(zInfo.minX); setMaxX(zInfo.maxX);
-                    setMinY(zInfo.minY); setMaxY(zInfo.maxY);
-                  }
-                }
-              }} style={{...S.btn, flex: 1, background: "#d97706", color: "#fff"}}>Fill Stitcher ↓</button>
+          {probeResults && probeResults.success && probeResults.bounds && probeResults.bounds.zoomInfo && <>
+            <p style={{...S.sec, marginTop: 12}}>Available zoom levels:</p>
+            <div style={S.mono}>
+              {Object.entries(probeResults.bounds.zoomInfo).map(([z, info]) => (
+                <div key={z} style={{cursor: "pointer"}} onClick={() => {
+                  setZoom(parseInt(z));
+                  setMaxX(info.estimatedMaxX);
+                  setMaxY(info.estimatedMaxY);
+                  setMinX(0); setMinY(0);
+                }}>
+                  z={z}: ~{info.estimatedMaxX + 1}x{info.estimatedMaxY + 1} tiles
+                  {parseInt(z) === zoom ? " ← selected" : " (tap to use)"}
+                </div>
+              ))}
             </div>
           </>}
         </div>
 
-        {/* AUTO PROBE SECTION */}
-        <div style={S.card}>
-          <p style={S.sec}>Auto Probe (TH.GL CDN)</p>
-          <p style={{fontSize: "0.72rem", color: "#888", marginBottom: 8}}>
-            Select a map ID and probe the CDN for the correct tile pattern
-          </p>
-          <div style={S.presets}>
-            {KNOWN_MAPS.map(m => (
-              <button key={m.id} onClick={() => setSelectedMap(m.id)}
-                style={{...S.chip, ...(selectedMap === m.id ? S.chipOn : {})}}>
-                {m.label}
-              </button>
-            ))}
-          </div>
-          <div style={{display: "flex", gap: 8, marginTop: 10}}>
-            <input value={selectedMap} onChange={e => setSelectedMap(e.target.value)}
-              placeholder="Custom map ID..." style={{...S.input, flex: 1, marginBottom: 0}} />
-            <button onClick={autoProbe} disabled={probing}
-              style={{...S.btn, width: "auto", padding: "0 20px", ...(probing ? S.off : {background: "#d97706", color: "#fff"})}}>
-              {probing ? "..." : "Probe"}
-            </button>
-          </div>
-        </div>
-
         {/* MANUAL TILE PATTERN */}
         <div style={S.card}>
-          <p style={S.sec}>Tile Pattern</p>
+          <p style={S.sec}>Tile Settings</p>
           <input value={tilePattern} onChange={e => setTilePattern(e.target.value)}
-            placeholder="https://cdn.th.gl/.../AkiWorld_WP/{z}/{x}/{y}.webp" style={S.input} />
+            placeholder="https://.../{z}/{x}/{y}.png" style={S.input} />
           <div style={S.g3}>
             <div><p style={S.ml}>Zoom</p><input type="number" value={zoom} onChange={e => setZoom(+e.target.value)} style={S.si} /></div>
             <div><p style={S.ml}>Tile px</p><input type="number" value={tileSize} onChange={e => setTileSize(+e.target.value)} style={S.si} /></div>
@@ -341,32 +243,31 @@ export default function Home() {
           {stitching && stitchProgress > 0 && <div style={S.bar}><div style={{...S.fill, width: stitchProgress + "%"}} /></div>}
         </div>
 
-        {/* PROBE PREVIEW */}
         {probeImg && <div style={S.card}>
-          <p style={S.sec}>Probe Preview:</p>
+          <p style={S.sec}>Tile Preview:</p>
           <img src={probeImg} style={{maxWidth: "100%", borderRadius: 6, border: "1px solid #333"}} alt="probe" />
         </div>}
 
-        {/* JS FINDINGS */}
-        {jsFindings.length > 0 && <div style={S.card}>
-          <p style={S.sec}>JS Bundle Findings ({jsFindings.length}):</p>
-          <p style={{fontSize: "0.72rem", color: "#888", marginBottom: 8}}>URLs found in the site{"'"}s JavaScript bundles — these may reveal the tile pattern:</p>
-          <div style={{...S.mono, maxHeight: 250, overflowY: "auto"}}>
-            {jsFindings.map((f, i) => <div key={i} style={{marginBottom: 6}}>
-              <span style={{color: "#888", fontSize: "0.6rem"}}>[{f.source}]</span><br/>{f.url}
-            </div>)}
-          </div>
-        </div>}
-
-        {/* STITCHED MAP */}
         {previewUrl && <div style={S.card}>
           <p style={S.sec}>Stitched Map:</p>
           <img src={previewUrl} style={{maxWidth: "100%", borderRadius: 6, border: "1px solid #333"}} alt="map" />
           <button onClick={() => { const a = document.createElement("a"); a.href = previewUrl; a.download = "wuwa_map_z" + zoom + ".png"; a.click(); }}
-            style={{...S.btn, background: "#059669", color: "#fff", marginTop: 10}}>
-            Download PNG
-          </button>
+            style={{...S.btn, background: "#059669", color: "#fff", marginTop: 10}}>Download PNG</button>
         </div>}
+
+        {/* INSTRUCTIONS */}
+        <div style={{...S.card, borderColor: "#333"}}>
+          <p style={S.sec}>How to get a tile URL</p>
+          <p style={{fontSize: "0.75rem", color: "#999", lineHeight: 1.7}}>
+            1. Open <b>extract.pics</b> in your browser<br/>
+            2. Paste a map URL (e.g. wuthering-waves-map.appsample.com)<br/>
+            3. Hit Extract<br/>
+            4. Find a 256x256 map tile in the results<br/>
+            5. Tap the link icon to copy its URL<br/>
+            6. Paste it above → tap Auto-Detect<br/>
+            7. Adjust zoom level → Stitch All → Download
+          </p>
+        </div>
       </>}
     </div>
   );
@@ -380,7 +281,7 @@ const S = {
   tab: { flex: 1, padding: 11, border: "1px solid #333", borderRadius: 8, background: "#15151f", color: "#888", fontSize: "0.88rem", fontWeight: 600, cursor: "pointer", textAlign: "center" },
   tabOn: { background: "#1e3a5f", color: "#93c5fd", borderColor: "#3b82f6" },
   card: { background: "#15151f", border: "1px solid #2a2a3a", borderRadius: 12, padding: 16, marginBottom: 12 },
-  presets: { display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 },
+  chips: { display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 },
   chip: { fontSize: "0.7rem", background: "#1e1e2e", color: "#93c5fd", border: "1px solid #333", borderRadius: 6, padding: "5px 8px", cursor: "pointer" },
   chipOn: { background: "#1e3a5f", borderColor: "#3b82f6" },
   input: { width: "100%", padding: 11, background: "#0d0d14", border: "1px solid #333", borderRadius: 8, color: "#eee", fontSize: "0.8rem", marginBottom: 8, boxSizing: "border-box" },
