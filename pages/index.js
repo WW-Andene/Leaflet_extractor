@@ -66,10 +66,12 @@ export default function Home() {
       if (d.success) {
         setTilePattern(d.pattern);
         setZoom(d.detectedZoom);
-        setMinX(0); setMinY(0);
+        setMinX(d.bounds.minX); setMinY(d.bounds.minY);
         setMaxX(d.bounds.maxX);
         setMaxY(d.bounds.maxY);
-        setStitchStatus("Pattern: " + d.pattern + " | Zoom " + d.detectedZoom + " | " + (d.bounds.maxX + 1) + "x" + (d.bounds.maxY + 1) + " tiles");
+        const cols = d.bounds.maxX - d.bounds.minX + 1;
+        const rows = d.bounds.maxY - d.bounds.minY + 1;
+        setStitchStatus("Pattern: " + d.pattern + " | Zoom " + d.detectedZoom + " | " + cols + "x" + rows + " tiles (" + (cols * rows) + " total)");
         // Show probe image
         const testUrl = d.pattern.replace("{z}", d.detectedZoom).replace("{x}", d.detectedX).replace("{y}", d.detectedY);
         setProbeImg("/api/tile-proxy?url=" + encodeURIComponent(testUrl));
@@ -204,12 +206,13 @@ export default function Home() {
               {Object.entries(probeResults.bounds.zoomInfo).map(([z, info]) => (
                 <div key={z} style={{cursor: "pointer"}} onClick={() => {
                   setZoom(parseInt(z));
+                  setMinX(info.estimatedMinX || 0);
                   setMaxX(info.estimatedMaxX);
+                  setMinY(info.estimatedMinY || 0);
                   setMaxY(info.estimatedMaxY);
-                  setMinX(0); setMinY(0);
                 }}>
-                  z={z}: ~{info.estimatedMaxX + 1}x{info.estimatedMaxY + 1} tiles
-                  {parseInt(z) === zoom ? " ← selected" : " (tap to use)"}
+                  z={z}: [{info.estimatedMinX || 0}-{info.estimatedMaxX}] x [{info.estimatedMinY || 0}-{info.estimatedMaxY}] ~{info.estimatedTiles || "?"} tiles
+                  {parseInt(z) === zoom ? " ← selected" : " (tap)"}
                 </div>
               ))}
             </div>

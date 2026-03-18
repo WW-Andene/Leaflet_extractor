@@ -14,21 +14,30 @@ export default async function handler(req, res) {
 }
 
 async function deriveTilePattern(sampleUrl, res) {
+  // Clean URL: strip query params, JSON junk, trailing backslashes
+  let cleaned = sampleUrl
+    .replace(/[?#].*$/, "")          // remove query string
+    .replace(/\{[^}]*\}$/g, "")     // remove trailing JSON like {"f":""}
+    .replace(/\\+$/g, "")           // remove trailing backslashes
+    .trim();
+
   // Try to detect z/x/y from the URL
   const patterns = [
-    /^(.*?)(\d{1,2})\/(\d{1,5})\/(\d{1,5})(\.\w{3,5})(.*)$/,
-    /^(.*?)(\d{1,2})[_-](\d{1,5})[_-](\d{1,5})(\.\w{3,5})(.*)$/,
+    /^(.*\/)(\d{1,2})\/(\d{1,5})\/(\d{1,5})(\.\w{3,5})$/,
+    /^(.*\/)(\d{1,2})[_-](\d{1,5})[_-](\d{1,5})(\.\w{3,5})$/,
   ];
 
   for (const re of patterns) {
-    const m = sampleUrl.match(re);
+    const m = cleaned.match(re);
     if (m) {
-      const [_, base, z, x, y, ext, rest] = m;
-      const pattern = base + "{z}/{x}/{y}" + ext + rest;
+      const [_, base, z, x, y, ext] = m;
+      const pattern = base + "{z}/{x}/{y}" + ext;
       const zNum = parseInt(z);
+      const xNum = parseInt(x);
+      const yNum = parseInt(y);
 
-      // Probe to find max bounds at this zoom
-      const bounds = await findBounds(pattern, zNum);
+      // Probe to find max bounds at this zoom using known-good coords
+      const bounds = await findBounds(pattern, zNum, xNum, yNum);
 
       return res.json({
         success: true,
@@ -43,43 +52,83 @@ async function deriveTilePattern(sampleUrl, res) {
     }
   }
 
-  return res.json({ success: false, error: "Could not detect z/x/y pattern from URL" });
+  return res.json({ success: false, error: "Could not detect z/x/y pattern from URL", cleaned, original: sampleUrl });
 }
 
-async function findBounds(pattern, zoom) {
+async function findBounds(pattern, zoom, knownX, knownY) {
   const bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
-  // Binary search for max X
-  let lo = 0, hi = 256;
+  // First verify the known tile works
+  const knownUrl = pattern.replace("{z}", zoom).replace("{x}", knownX).replace("{y}", knownY);
+  const knownOk = await testTileUrl(knownUrl);
+  if (!knownOk) return { ...bounds, error: "Known tile failed", testedUrl: knownUrl };
+
+  // Binary search for max X (test at knownY which we know exists)
+  let lo = knownX, hi = 512;
+  // First find rough upper bound
+  while (hi <= 512) {
+    const url = pattern.replace("{z}", zoom).replace("{x}", hi).replace("{y}", knownY);
+    if (await testTileUrl(url)) { lo = hi; hi *= 2; }
+    else break;
+  }
+  hi = Math.min(hi, 512);
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    const url = pattern.replace("{z}", zoom).replace("{x}", mid).replace("{y}", 0);
-    const ok = await testTileUrl(url);
-    if (ok) lo = mid; else hi = mid - 1;
+    const url = pattern.replace("{z}", zoom).replace("{x}", mid).replace("{y}", knownY);
+    if (await testTileUrl(url)) lo = mid; else hi = mid - 1;
   }
   bounds.maxX = lo;
 
-  // Binary search for max Y
-  lo = 0; hi = 256;
+  // Binary search for min X
+  lo = 0; hi = knownX;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const url = pattern.replace("{z}", zoom).replace("{x}", mid).replace("{y}", knownY);
+    if (await testTileUrl(url)) hi = mid; else lo = mid + 1;
+  }
+  bounds.minX = lo;
+
+  // Binary search for max Y (test at knownX)
+  lo = knownY; hi = 512;
+  while (hi <= 512) {
+    const url = pattern.replace("{z}", zoom).replace("{x}", knownX).replace("{y}", hi);
+    if (await testTileUrl(url)) { lo = hi; hi *= 2; }
+    else break;
+  }
+  hi = Math.min(hi, 512);
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
-    const url = pattern.replace("{z}", zoom).replace("{x}", 0).replace("{y}", mid);
-    const ok = await testTileUrl(url);
-    if (ok) lo = mid; else hi = mid - 1;
+    const url = pattern.replace("{z}", zoom).replace("{x}", knownX).replace("{y}", mid);
+    if (await testTileUrl(url)) lo = mid; else hi = mid - 1;
   }
   bounds.maxY = lo;
 
-  // Also check other zoom levels
+  // Binary search for min Y
+  lo = 0; hi = knownY;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const url = pattern.replace("{z}", zoom).replace("{x}", knownX).replace("{y}", mid);
+    if (await testTileUrl(url)) hi = mid; else lo = mid + 1;
+  }
+  bounds.minY = lo;
+
+  // Check other zoom levels
   const zoomInfo = {};
-  for (let z = Math.max(0, zoom - 3); z <= zoom + 3; z++) {
-    const testUrl = pattern.replace("{z}", z).replace("{x}", 0).replace("{y}", 0);
+  for (let z = Math.max(0, zoom - 4); z <= zoom + 2; z++) {
+    // Scale known coords to this zoom
+    const scale = Math.pow(2, z - zoom);
+    const testX = Math.max(0, Math.round(knownX * scale));
+    const testY = Math.max(0, Math.round(knownY * scale));
+    const testUrl = pattern.replace("{z}", z).replace("{x}", testX).replace("{y}", testY);
     const ok = await testTileUrl(testUrl);
     if (ok) {
-      // Quick bounds estimate: at each zoom, tiles double
-      const scale = Math.pow(2, z - zoom);
       zoomInfo[z] = {
+        estimatedMinX: Math.max(0, Math.round(bounds.minX * scale)),
         estimatedMaxX: Math.max(0, Math.round(bounds.maxX * scale)),
+        estimatedMinY: Math.max(0, Math.round(bounds.minY * scale)),
         estimatedMaxY: Math.max(0, Math.round(bounds.maxY * scale)),
+        estimatedTiles: Math.max(0, Math.round(bounds.maxX * scale) - Math.round(bounds.minX * scale) + 1) *
+                        Math.max(0, Math.round(bounds.maxY * scale) - Math.round(bounds.minY * scale) + 1),
         available: true,
       };
     }
