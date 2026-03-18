@@ -163,10 +163,15 @@ export default function EditorTab() {
   async function loadSource(idx) {
     var src = sources[idx];
     if (!src.pattern || loadingSrc) return;
+    var cols = src.maxX - src.minX + 1, rows = src.maxY - src.minY + 1, total = cols * rows;
+    // Memory warning: ~50KB per tile as dataURL, warn above 500 tiles
+    if (total > 500) {
+      var estMB = Math.round(total * 50 / 1024);
+      if (!confirm("Loading " + total + " tiles (~" + estMB + "MB memory). Continue?")) return;
+    }
     abortRef.current = false;
     setLoadingSrc(true); setLoadProgress(0);
     var bank = bankRef.current;
-    var cols = src.maxX - src.minX + 1, rows = src.maxY - src.minY + 1, total = cols * rows;
     setLoadStatus("Loading " + total + " tiles...");
     var done = 0, failed = 0;
     for (var y = src.minY; y <= src.maxY; y++) {
@@ -266,6 +271,7 @@ export default function EditorTab() {
   }
 
   function clearGrid() { setGrid(new Array(gridW * gridH).fill(null)); setSwapFirst(null); }
+  function clearBank() { bankRef.current = {}; setPaletteTiles([]); setSelected(null); setLoadStatus("Bank cleared — all tiles freed from memory"); }
   function toggleSrc(field) { return function() { setSources(function(prev) { var n = prev.slice(); n[activeSrc] = Object.assign({}, n[activeSrc]); n[activeSrc][field] = !n[activeSrc][field]; return n; }); }; }
   var visiblePalette = paletteFilter === -1 ? paletteTiles : paletteTiles.filter(function(t) { return t.srcIdx === paletteFilter; });
   var filledCount = grid.filter(function(c2) { return c2 !== null; }).length;
@@ -341,7 +347,7 @@ export default function EditorTab() {
     {/* PALETTE */}
     {paletteTiles.length > 0 && <div style={S.card}>
       <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6}}>
-        <p style={S.sec}>{"Palette (" + paletteTiles.length + ")"}</p>
+        <p style={S.sec}>{"Palette (" + paletteTiles.length + " | ~" + Math.round(paletteTiles.length * 50 / 1024) + "MB)"}</p>
         <div style={{display: "flex", gap: 3}}>
           <button onClick={function(){setPaletteFilter(-1)}} style={Object.assign({}, S.sm, paletteFilter === -1 ? {background: "#555"} : {})}>All</button>
           {sources.map(function(src, i) { return <button key={i} onClick={function(){setPaletteFilter(i)}} style={Object.assign({}, S.sm, paletteFilter === i ? {background: src.color} : {})}>{src.name ? src.name.substring(0, 3) : "S" + (i + 1)}</button>; })}
@@ -403,8 +409,9 @@ export default function EditorTab() {
 
     {/* ACTIONS */}
     <div style={Object.assign({}, S.card, {display: "flex", gap: 6, flexWrap: "wrap"})}>
-      <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 110, background: "#059669"})}>Download PNG</button>
-      <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 110, background: "#7f1d1d"})}>Clear Grid</button>
+      <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#059669"})}>Download</button>
+      <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#7f1d1d"})}>Clear Grid</button>
+      <button onClick={clearBank} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#991b1b"})}>Clear Bank</button>
     </div>
     {dlStatus && <p style={Object.assign({}, S.st, {textAlign: "center"})}>{dlStatus}</p>}
   </>;

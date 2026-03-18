@@ -411,8 +411,8 @@ export default function Home() {
             <div><p style={S.ml}>Min Y</p><input type="number" value={minY} onChange={function(e){setMinY(+e.target.value)}} style={S.si} /></div>
             <div><p style={S.ml}>Max Y</p><input type="number" value={maxY} onChange={function(e){setMaxY(+e.target.value)}} style={S.si} /></div>
           </div>
-          <p style={{fontSize: "0.72rem", color: "#666", marginTop: 6}}>
-            {"Output: " + (maxX - minX + 1) * tileSize + "x" + (maxY - minY + 1) * tileSize + "px (" + (maxX - minX + 1) * (maxY - minY + 1) + " tiles)"}
+          <p style={{fontSize: "0.72rem", color: (maxX - minX + 1) * (maxY - minY + 1) > 500 ? "#f59e0b" : "#666", marginTop: 6}}>
+            {"Output: " + (maxX - minX + 1) * tileSize + "x" + (maxY - minY + 1) * tileSize + "px (" + (maxX - minX + 1) * (maxY - minY + 1) + " tiles)" + ((maxX - minX + 1) * (maxY - minY + 1) > 500 ? " — large! may be slow" : "")}
           </p>
           <div style={{display: "flex", gap: 6, marginTop: 10}}>
             <button onClick={testOneTile} disabled={!tilePattern} style={Object.assign({}, S.btn, {flex: 1, background: "#d97706", color: "#fff"})}>Test 1</button>

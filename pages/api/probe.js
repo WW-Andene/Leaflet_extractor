@@ -103,30 +103,44 @@ async function findBounds(pattern, zoom, knownX, knownY) {
     return lo;
   }
 
-  bounds.maxX = await searchMax("x", knownY, knownX, 512);
-  bounds.minX = await searchMin("x", knownY, knownX, 512);
-  bounds.maxY = await searchMax("y", knownX, knownY, 512);
-  bounds.minY = await searchMin("y", knownX, knownY, 512);
+  // Search X bounds (parallel pair)
+  var xResults = await Promise.all([
+    searchMax("x", knownY, knownX, 512),
+    searchMin("x", knownY, knownX, 512)
+  ]);
+  bounds.maxX = xResults[0];
+  bounds.minX = xResults[1];
 
-  // Check other zoom levels
+  // Search Y bounds (parallel pair)
+  var yResults = await Promise.all([
+    searchMax("y", knownX, knownY, 512),
+    searchMin("y", knownX, knownY, 512)
+  ]);
+  bounds.maxY = yResults[0];
+  bounds.minY = yResults[1];
+
+  // Check zoom levels in parallel
   const zoomInfo = {};
+  var zoomChecks = [];
   for (let z = Math.max(0, zoom - 4); z <= zoom + 2; z++) {
-    const scale = Math.pow(2, z - zoom);
-    const testX = Math.round(knownX * scale);
-    const testY = Math.round(knownY * scale);
-    if (await testTileUrl(build(pattern, z, testX, testY))) {
-      const eMinX = Math.round(bounds.minX * scale);
-      const eMaxX = Math.round(bounds.maxX * scale);
-      const eMinY = Math.round(bounds.minY * scale);
-      const eMaxY = Math.round(bounds.maxY * scale);
-      zoomInfo[z] = {
-        estimatedMinX: eMinX, estimatedMaxX: eMaxX,
-        estimatedMinY: eMinY, estimatedMaxY: eMaxY,
-        estimatedTiles: (eMaxX - eMinX + 1) * (eMaxY - eMinY + 1),
-        available: true,
-      };
-    }
+    zoomChecks.push((async function(zl) {
+      const scale = Math.pow(2, zl - zoom);
+      const testX = Math.round(knownX * scale);
+      const testY = Math.round(knownY * scale);
+      if (await testTileUrl(build(pattern, zl, testX, testY))) {
+        return {
+          z: zl,
+          estimatedMinX: Math.round(bounds.minX * scale), estimatedMaxX: Math.round(bounds.maxX * scale),
+          estimatedMinY: Math.round(bounds.minY * scale), estimatedMaxY: Math.round(bounds.maxY * scale),
+          estimatedTiles: (Math.round(bounds.maxX * scale) - Math.round(bounds.minX * scale) + 1) * (Math.round(bounds.maxY * scale) - Math.round(bounds.minY * scale) + 1),
+          available: true,
+        };
+      }
+      return null;
+    })(z));
   }
+  var zoomResults = await Promise.all(zoomChecks);
+  zoomResults.forEach(function(r) { if (r) zoomInfo[r.z] = r; });
 
   return { ...bounds, zoomInfo, refTileSize };
 }
@@ -134,25 +148,27 @@ async function findBounds(pattern, zoom, knownX, knownY) {
 // Reference size set after first known-good tile
 var refTileSize = 0;
 
+function getReferer(url) {
+  try { return new URL(url).origin + "/"; } catch(e) { return ""; }
+}
+
 async function testTileUrl(url) {
   try {
+    var hdrs = { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" };
+    var ref = getReferer(url);
+    if (ref) hdrs["Referer"] = ref;
     const r = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" },
+      headers: hdrs,
       signal: AbortSignal.timeout(4000),
     });
     if (!r.ok) return false;
     const ct = r.headers.get("content-type") || "";
     if (!ct.includes("image") && !ct.includes("octet")) return false;
-    // Get actual content size
     const buf = await r.arrayBuffer();
     const size = buf.byteLength;
-    // If we have a reference size, reject tiles that are tiny compared to it
-    // (CDN placeholder tiles are typically <2KB, real tiles are 5-100KB)
     if (refTileSize > 0) {
-      // Tile must be at least 15% of reference size or >3KB
       if (size < 3000 && size < refTileSize * 0.15) return false;
     } else {
-      // No reference yet — just basic size check
       if (size < 500) return false;
     }
     return true;
@@ -161,8 +177,11 @@ async function testTileUrl(url) {
 
 async function measureTile(url) {
   try {
+    var hdrs = { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" };
+    var ref = getReferer(url);
+    if (ref) hdrs["Referer"] = ref;
     const r = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" },
+      headers: hdrs,
       signal: AbortSignal.timeout(4000),
     });
     if (!r.ok) return 0;
