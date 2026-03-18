@@ -156,7 +156,7 @@ export default function EditorTab() {
         }
         var key = tileKey(idx, x, y);
         if (bank[key]) { done++; setLoadProgress(Math.round(((done + failed) / total) * 100)); continue; }
-        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.swapXY);
+        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, false);
         var dataUrl = await loadImgAsDataUrl("/api/tile-proxy?url=" + encodeURIComponent(rawUrl));
         if (dataUrl) { bank[key] = dataUrl; done++; } else failed++;
         setLoadProgress(Math.round(((done + failed) / total) * 100));
@@ -174,8 +174,9 @@ export default function EditorTab() {
   function autoPlace(idx) {
     var src = sources[idx]; var bank = bankRef.current;
     var srcCols = src.maxX - src.minX + 1, srcRows = src.maxY - src.minY + 1;
-    // swapXY only affects URL building (in loadSource), NOT grid placement
-    var placeCols = srcCols, placeRows = srcRows;
+    // swapXY transposes the grid layout (cols/rows swapped)
+    var placeCols = src.swapXY ? srcRows : srcCols;
+    var placeRows = src.swapXY ? srcCols : srcRows;
     var oldW = gridW, oldH = gridH, oldGrid = grid;
     var hasContent = false, exMinX = oldW, exMaxX = 0, exMinY = oldH, exMaxY = 0;
     for (var i = 0; i < oldGrid.length; i++) {
@@ -185,11 +186,9 @@ export default function EditorTab() {
     }
     var offX, offY, newW, newH;
     if (!hasContent) {
-      // Exact fit like Stitch tab — no padding
       newW = placeCols; newH = placeRows;
       offX = 0; offY = 0;
     } else {
-      // Place adjacent: right side with 1-tile gap, or below if too wide
       offX = exMaxX + 1; offY = exMinY;
       if (offX + placeCols > oldW + placeCols + 2) { offX = exMinX; offY = exMaxY + 1; }
       newW = Math.max(oldW, offX + placeCols); newH = Math.max(oldH, offY + placeRows);
@@ -201,9 +200,13 @@ export default function EditorTab() {
     for (var dy = 0; dy < srcRows; dy++) for (var dx = 0; dx < srcCols; dx++) {
       var tileX = src.minX + dx, tileY = src.minY + dy;
       var key = tileKey(idx, tileX, tileY); if (!bank[key]) continue;
-      // Same as Stitch tab: flip only, no swap (swap already handled in URL)
-      var gx2 = src.flipX ? (srcCols - 1 - dx) : dx;
-      var gy2 = src.flipY ? (srcRows - 1 - dy) : dy;
+      // swapXY: transpose dx/dy on grid. Flip applied after.
+      var rawGx = src.swapXY ? dy : dx;
+      var rawGy = src.swapXY ? dx : dy;
+      var maxGx = src.swapXY ? (srcRows - 1) : (srcCols - 1);
+      var maxGy = src.swapXY ? (srcCols - 1) : (srcRows - 1);
+      var gx2 = src.flipX ? (maxGx - rawGx) : rawGx;
+      var gy2 = src.flipY ? (maxGy - rawGy) : rawGy;
       var gi = (offY + gy2) * newW + (offX + gx2);
       if (gi >= 0 && gi < ng.length) ng[gi] = { key: key, dataUrl: bank[key], srcIdx: idx, ox: tileX, oy: tileY };
     }
