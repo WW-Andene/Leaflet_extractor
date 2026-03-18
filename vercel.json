@@ -9,6 +9,10 @@
     "pages/api/render.js": {
       "maxDuration": 60,
       "memory": 1024
+    },
+    "pages/api/stitch-strips.js": {
+      "maxDuration": 120,
+      "memory": 3009
     }
   }
 }

@@ -337,60 +337,119 @@ export default function EditorTab() {
 
     var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
     var W = cropW * scaledTile, H = cropH * scaledTile;
-
-    // Auto-downscale if canvas too large
     var maxSide = 16384, maxPixels = 268000000;
-    if (W > maxSide || H > maxSide || W * H > maxPixels) {
-      var fitScale = Math.min(maxSide / (cropW * tSize), maxSide / (cropH * tSize), Math.sqrt(maxPixels / (cropW * tSize * cropH * tSize)));
-      scale = Math.floor(fitScale * 10) / 10;
-      if (scale < 0.1) scale = 0.1;
-      scaledTile = Math.round(tSize * scale);
-      W = cropW * scaledTile; H = cropH * scaledTile;
-      setDlStatus("Auto-reduced to " + scale + "x (" + W + "x" + H + "px)...");
-      await wait(50);
-    }
+    var fitsCanvas = W <= maxSide && H <= maxSide && W * H <= maxPixels;
 
-    setDlStatus("Rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + ")...");
-    var c = document.createElement("canvas"); c.width = W; c.height = H;
-    var ctx = c.getContext("2d");
-    if (!ctx) { setDlStatus("Canvas " + W + "x" + H + "px failed — try lower scale"); return; }
-    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-
-    // Render in batches of 20 with progress
-    for (var b = 0; b < filled.length; b += 20) {
-      var batch = filled.slice(b, b + 20);
-      await Promise.all(batch.map(function(t) {
-        return new Promise(function(res) {
-          var img = new Image();
-          img.crossOrigin = "anonymous";
-          img.onload = function() {
-            ctx.drawImage(img, (t.gx - bMinX) * scaledTile, (t.gy - bMinY) * scaledTile, scaledTile, scaledTile);
-            res();
-          };
-          img.onerror = function() { res(); };
-          img.src = t.cell.dataUrl;
-        });
-      }));
-      if ((b + 20) % 200 === 0 || b + 20 >= filled.length) {
-        setDlStatus("Rendering: " + Math.min(b + 20, filled.length) + "/" + filled.length + " tiles...");
-        await wait(5);
+    if (fitsCanvas) {
+      // --- DIRECT CLIENT RENDER ---
+      setDlStatus("Rendering " + W + "x" + H + "px (" + filled.length + " tiles)...");
+      var c = document.createElement("canvas"); c.width = W; c.height = H;
+      var ctx = c.getContext("2d");
+      if (!ctx) { setDlStatus("Canvas failed — falling back to strip mode"); fitsCanvas = false; }
+      else {
+        ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
+        for (var b = 0; b < filled.length; b += 20) {
+          var batch = filled.slice(b, b + 20);
+          await Promise.all(batch.map(function(t) {
+            return new Promise(function(res) {
+              var img = new Image(); img.crossOrigin = "anonymous";
+              img.onload = function() { ctx.drawImage(img, (t.gx - bMinX) * scaledTile, (t.gy - bMinY) * scaledTile, scaledTile, scaledTile); res(); };
+              img.onerror = function() { res(); }; img.src = t.cell.dataUrl;
+            });
+          }));
+          if ((b + 20) % 200 === 0 || b + 20 >= filled.length) {
+            setDlStatus("Rendering: " + Math.min(b + 20, filled.length) + "/" + filled.length); await wait(5);
+          }
+        }
+        setDlStatus("Encoding " + fmt.toUpperCase() + "...");
+        await wait(50);
+        var mimeType = fmt === "jpeg" ? "image/jpeg" : "image/png";
+        var quality = fmt === "jpeg" ? 0.92 : undefined;
+        c.toBlob(function(blob) {
+          if (!blob) { setDlStatus("Encode failed"); return; }
+          var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
+          var ext = fmt === "jpeg" ? "jpg" : "png";
+          var blobUrl = URL.createObjectURL(blob); var dl = document.createElement("a"); dl.href = blobUrl;
+          dl.download = "tilemap_" + W + "x" + H + "." + ext; dl.click();
+          setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
+          setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase());
+        }, mimeType, quality);
+        return;
       }
     }
 
-    setDlStatus("Encoding " + fmt.toUpperCase() + "...");
-    await wait(50);
-    var mimeType = fmt === "jpeg" ? "image/jpeg" : "image/png";
-    var quality = fmt === "jpeg" ? 0.92 : undefined;
-    c.toBlob(function(blob) {
-      if (!blob) { setDlStatus("Encode failed — canvas too large?"); return; }
-      var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
+    // --- STRIP-BASED RENDER (exceeds canvas limit) ---
+    // Render horizontal strips client-side, send to server for stitching via sharp
+    var stripH = Math.floor(maxSide / scaledTile) * scaledTile; // max strip height in px, tile-aligned
+    if (stripH < scaledTile) stripH = scaledTile;
+    var numStrips = Math.ceil(H / stripH);
+    setDlStatus("Large image " + W + "x" + H + "px: rendering " + numStrips + " strips...");
+
+    var stripBlobs = [];
+    for (var s = 0; s < numStrips; s++) {
+      var stripTop = s * stripH;
+      var stripBot = Math.min(stripTop + stripH, H);
+      var stripHeight = stripBot - stripTop;
+      var stripTopRow = Math.floor(stripTop / scaledTile) + bMinY;
+      var stripBotRow = Math.ceil(stripBot / scaledTile) + bMinY - 1;
+
+      // Get tiles in this strip
+      var stripTiles = filled.filter(function(t) { return t.gy >= stripTopRow && t.gy <= stripBotRow; });
+
+      var sc = document.createElement("canvas"); sc.width = W; sc.height = stripHeight;
+      var sctx = sc.getContext("2d");
+      if (!sctx) { setDlStatus("Strip canvas failed at strip " + (s + 1)); return; }
+      sctx.fillStyle = "#000"; sctx.fillRect(0, 0, W, stripHeight);
+
+      for (var sb = 0; sb < stripTiles.length; sb += 20) {
+        var sbatch = stripTiles.slice(sb, sb + 20);
+        await Promise.all(sbatch.map(function(t) {
+          return new Promise(function(res) {
+            var img = new Image(); img.crossOrigin = "anonymous";
+            img.onload = function() {
+              sctx.drawImage(img, (t.gx - bMinX) * scaledTile, (t.gy - bMinY) * scaledTile - stripTop, scaledTile, scaledTile);
+              res();
+            };
+            img.onerror = function() { res(); }; img.src = t.cell.dataUrl;
+          });
+        }));
+      }
+
+      // Encode strip as JPEG (always JPEG for strips to keep upload small)
+      var stripBlob = await new Promise(function(res) { sc.toBlob(function(b) { res(b); }, "image/jpeg", 0.95); });
+      if (!stripBlob) { setDlStatus("Strip " + (s + 1) + " encode failed"); return; }
+      stripBlobs.push(stripBlob);
+      setDlStatus("Strip " + (s + 1) + "/" + numStrips + " rendered (" + Math.round(stripBlob.size / 1024) + "KB)");
+      await wait(10);
+    }
+
+    // Send strips to server for stitching
+    setDlStatus("Uploading " + numStrips + " strips to server for stitching...");
+    var formData = new FormData();
+    for (var si = 0; si < stripBlobs.length; si++) {
+      formData.append("strip_" + si, stripBlobs[si], "strip_" + si + ".jpg");
+    }
+    formData.append("config", JSON.stringify({
+      width: W, height: H, numStrips: numStrips, stripHeight: stripH,
+      format: fmt, quality: 92
+    }));
+
+    try {
+      var resp = await fetch("/api/stitch-strips", { method: "POST", body: formData });
+      if (!resp.ok) {
+        var err = ""; try { var ej = await resp.json(); err = ej.error || resp.status; } catch(e) { err = resp.status; }
+        setDlStatus("Server stitch error: " + err); return;
+      }
+      var finalBlob = await resp.blob();
+      var sizeMB = (finalBlob.size / (1024 * 1024)).toFixed(1);
       var ext = fmt === "jpeg" ? "jpg" : "png";
-      var blobUrl = URL.createObjectURL(blob);
-      var dl = document.createElement("a"); dl.href = blobUrl;
+      var blobUrl = URL.createObjectURL(finalBlob); var dl = document.createElement("a"); dl.href = blobUrl;
       dl.download = "tilemap_" + W + "x" + H + "." + ext; dl.click();
       setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
       setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase());
-    }, mimeType, quality);
+    } catch (e) {
+      setDlStatus("Stitch failed: " + e.message);
+    }
   }
 
   async function exportTiles() {
@@ -711,10 +770,11 @@ export default function EditorTab() {
         var ts = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
         var ow = (bMxX - bMnX + 1) * Math.round(ts * dlScale);
         var oh = (bMxY - bMnY + 1) * Math.round(ts * dlScale);
-        var warn = ow > 30000 || oh > 30000;
-        var slow = cnt > 1000;
-        return <p style={{fontSize: "0.65rem", color: warn ? "#ef4444" : slow ? "#f59e0b" : "#666", marginTop: 4, marginBottom: 8}}>
-          {"Output: " + ow + "x" + oh + "px (" + cnt + " tiles, server render)" + (warn ? " — exceeds 30000px limit" : "") + (slow && !warn ? " — large, may take 30-60s" : "")}
+        var warn = ow > 50000 || oh > 50000;
+        var needStrips = ow > 16384 || oh > 16384 || ow * oh > 268000000;
+        var mode = needStrips ? "strip render" : "client render";
+        return <p style={{fontSize: "0.65rem", color: warn ? "#ef4444" : needStrips ? "#f59e0b" : "#666", marginTop: 4, marginBottom: 8}}>
+          {"Output: " + ow + "x" + oh + "px (" + cnt + " tiles, " + mode + ")" + (warn ? " — exceeds 50000px limit" : "")}
         </p>;
       })()}
       <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
