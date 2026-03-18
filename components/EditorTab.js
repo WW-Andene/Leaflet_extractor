@@ -320,6 +320,7 @@ export default function EditorTab() {
     var tSize = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
     var scale = dlScale;
     var fmt = dlFormat;
+    var scaledTile = Math.round(tSize * scale);
 
     // Find bounding box
     var bMinX = gridW, bMaxX = 0, bMinY = gridH, bMaxY = 0;
@@ -335,64 +336,61 @@ export default function EditorTab() {
     if (filled.length === 0) { setDlStatus("Grid is empty!"); return; }
 
     var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
-    var scaledTile = Math.round(tSize * scale);
     var W = cropW * scaledTile, H = cropH * scaledTile;
 
-    // Build tile list with original coordinates for server
-    var tileList = [];
-    for (var j = 0; j < filled.length; j++) {
-      var f = filled[j];
-      var c = f.cell;
-      tileList.push({
-        srcIdx: c.srcIdx || 0,
-        x: c.ox, y: c.oy,
-        gx: f.gx - bMinX, gy: f.gy - bMinY,
-      });
+    // Auto-downscale if canvas too large
+    var maxSide = 16384, maxPixels = 268000000;
+    if (W > maxSide || H > maxSide || W * H > maxPixels) {
+      var fitScale = Math.min(maxSide / (cropW * tSize), maxSide / (cropH * tSize), Math.sqrt(maxPixels / (cropW * tSize * cropH * tSize)));
+      scale = Math.floor(fitScale * 10) / 10;
+      if (scale < 0.1) scale = 0.1;
+      scaledTile = Math.round(tSize * scale);
+      W = cropW * scaledTile; H = cropH * scaledTile;
+      setDlStatus("Auto-reduced to " + scale + "x (" + W + "x" + H + "px)...");
+      await wait(50);
     }
 
-    // Build patterns array from sources
-    var pats = sources.map(function(src) {
-      return { pattern: src.pattern, zoom: src.zoom, swapXY: src.swapXY };
-    });
+    setDlStatus("Rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + ")...");
+    var c = document.createElement("canvas"); c.width = W; c.height = H;
+    var ctx = c.getContext("2d");
+    if (!ctx) { setDlStatus("Canvas " + W + "x" + H + "px failed — try lower scale"); return; }
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
 
-    setDlStatus("Server rendering " + W + "x" + H + "px (" + filled.length + " tiles, " + fmt.toUpperCase() + " " + scale + "x)...");
-
-    try {
-      var resp = await fetch("/api/render", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          patterns: pats,
-          tiles: tileList,
-          tileSize: tSize,
-          scale: scale,
-          cropW: cropW,
-          cropH: cropH,
-          format: fmt,
-          quality: 92,
-        }),
-      });
-
-      if (!resp.ok) {
-        var err = "";
-        try { var ej = await resp.json(); err = ej.error || resp.status; } catch(e) { err = resp.status; }
-        setDlStatus("Server error: " + err);
-        return;
+    // Render in batches of 20 with progress
+    for (var b = 0; b < filled.length; b += 20) {
+      var batch = filled.slice(b, b + 20);
+      await Promise.all(batch.map(function(t) {
+        return new Promise(function(res) {
+          var img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = function() {
+            ctx.drawImage(img, (t.gx - bMinX) * scaledTile, (t.gy - bMinY) * scaledTile, scaledTile, scaledTile);
+            res();
+          };
+          img.onerror = function() { res(); };
+          img.src = t.cell.dataUrl;
+        });
+      }));
+      if ((b + 20) % 200 === 0 || b + 20 >= filled.length) {
+        setDlStatus("Rendering: " + Math.min(b + 20, filled.length) + "/" + filled.length + " tiles...");
+        await wait(5);
       }
+    }
 
-      var blob = await resp.blob();
+    setDlStatus("Encoding " + fmt.toUpperCase() + "...");
+    await wait(50);
+    var mimeType = fmt === "jpeg" ? "image/jpeg" : "image/png";
+    var quality = fmt === "jpeg" ? 0.92 : undefined;
+    c.toBlob(function(blob) {
+      if (!blob) { setDlStatus("Encode failed — canvas too large?"); return; }
       var sizeMB = (blob.size / (1024 * 1024)).toFixed(1);
       var ext = fmt === "jpeg" ? "jpg" : "png";
       var blobUrl = URL.createObjectURL(blob);
-      var dl = document.createElement("a");
-      dl.href = blobUrl;
-      dl.download = "tilemap_" + W + "x" + H + "." + ext;
-      dl.click();
+      var dl = document.createElement("a"); dl.href = blobUrl;
+      dl.download = "tilemap_" + W + "x" + H + "." + ext; dl.click();
       setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
-      setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase() + " (" + filled.length + " tiles)");
-    } catch (e) {
-      setDlStatus("Render failed: " + e.message);
-    }
+      setDlStatus("Downloaded " + W + "x" + H + "px | " + sizeMB + "MB " + fmt.toUpperCase());
+    }, mimeType, quality);
   }
 
   async function exportTiles() {
