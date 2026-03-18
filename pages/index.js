@@ -35,6 +35,7 @@ export default function Home() {
   a = s(false); var flipY = a[0], setFlipY = a[1];
   a = s(false); var flipX = a[0], setFlipX = a[1];
   a = s(false); var swapXY = a[0], setSwapXY = a[1];
+  a = s(false); var transpose = a[0], setTranspose = a[1];
   a = s(null); var gridPreview = a[0], setGridPreview = a[1];
   a = s(null); var probeImg = a[0], setProbeImg = a[1];
   a = s([]); var failedTiles = a[0], setFailedTiles = a[1];
@@ -194,8 +195,13 @@ export default function Home() {
             await wait(600 * (attempt + 1));
           }
           if (img) {
-            var px = (flipX ? (maxX - x) : (x - minX)) * tileSize;
-            var py = (flipY ? (maxY - y) : (y - minY)) * tileSize;
+            var dx = x - minX, dy = y - minY;
+            var gx, gy;
+            if (transpose) { gx = dy; gy = dx; } else { gx = dx; gy = dy; }
+            var cols2 = maxX - minX + 1, rows2 = maxY - minY + 1;
+            var gw = transpose ? rows2 : cols2, gh = transpose ? cols2 : rows2;
+            var px = (flipX ? (gw - 1 - gx) : gx) * tileSize;
+            var py = (flipY ? (gh - 1 - gy) : gy) * tileSize;
             ctx.drawImage(img, px, py, tileSize, tileSize);
             done++;
           } else {
@@ -219,8 +225,10 @@ export default function Home() {
     if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch(e){} }
     setPreviewUrl(null); setStitchProgress(0); setFailedTiles([]);
     var cols = maxX - minX + 1, rows = maxY - minY + 1;
-    var total = cols * rows, W = cols * tileSize, H = rows * tileSize;
-    setStitchStatus("Stitching " + W + "x" + H + "px (" + total + " tiles)...");
+    var total = cols * rows;
+    var canvasW = transpose ? rows : cols, canvasH = transpose ? cols : rows;
+    var W = canvasW * tileSize, H = canvasH * tileSize;
+    setStitchStatus("Stitching " + W + "x" + H + "px (" + total + " tiles" + (transpose ? ", transposed" : "") + ")...");
     var c = document.createElement("canvas");
     c.width = W; c.height = H;
     var ctx = c.getContext("2d");
@@ -258,8 +266,13 @@ export default function Home() {
 
     for (var y = minY; y <= maxY; y++) {
       for (var x = minX; x <= maxX; x++) {
-        var px = (flipX ? (maxX - x) : (x - minX)) * tileSize;
-        var py = (flipY ? (maxY - y) : (y - minY)) * tileSize;
+        var dx = x - minX, dy = y - minY;
+        var gx, gy;
+        if (transpose) { gx = dy; gy = dx; } else { gx = dx; gy = dy; }
+        var cols3 = maxX - minX + 1, rows3 = maxY - minY + 1;
+        var gw = transpose ? rows3 : cols3, gh = transpose ? cols3 : rows3;
+        var px = (flipX ? (gw - 1 - gx) : gx) * tileSize;
+        var py = (flipY ? (gh - 1 - gy) : gy) * tileSize;
         // Sample a few pixels from this tile area
         var data = canvasCtx.getImageData(px + tileSize / 2, py + tileSize / 2, 1, 1).data;
         var data2 = canvasCtx.getImageData(px + 10, py + 10, 1, 1).data;
@@ -400,10 +413,11 @@ export default function Home() {
             <div><p style={S.ml}>Tile px</p><input type="number" value={tileSize} onChange={function(e){setTileSize(+e.target.value)}} style={S.si} /></div>
             <div><p style={S.ml}>Proxy</p><button onClick={function(){setUseProxy(!useProxy)}} style={Object.assign({}, S.si, {background: useProxy ? "#059669" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{useProxy ? "ON" : "OFF"}</button></div>
           </div>
-          <div style={S.g3}>
+          <div style={S.g4}>
             <div><p style={S.ml}>Flip Y</p><button onClick={function(){setFlipY(!flipY)}} style={Object.assign({}, S.si, {background: flipY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{flipY ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip X</p><button onClick={function(){setFlipX(!flipX)}} style={Object.assign({}, S.si, {background: flipX ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{flipX ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Swap XY</p><button onClick={function(){setSwapXY(!swapXY)}} style={Object.assign({}, S.si, {background: swapXY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{swapXY ? "ON" : "OFF"}</button></div>
+            <div><p style={S.ml}>Transpose</p><button onClick={function(){setTranspose(!transpose)}} style={Object.assign({}, S.si, {background: transpose ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"})}>{transpose ? "ON" : "OFF"}</button></div>
           </div>
           <div style={S.g4}>
             <div><p style={S.ml}>Min X</p><input type="number" value={minX} onChange={function(e){setMinX(+e.target.value)}} style={S.si} /></div>
@@ -412,7 +426,11 @@ export default function Home() {
             <div><p style={S.ml}>Max Y</p><input type="number" value={maxY} onChange={function(e){setMaxY(+e.target.value)}} style={S.si} /></div>
           </div>
           <p style={{fontSize: "0.72rem", color: (maxX - minX + 1) * (maxY - minY + 1) > 500 ? "#f59e0b" : "#666", marginTop: 6}}>
-            {"Output: " + (maxX - minX + 1) * tileSize + "x" + (maxY - minY + 1) * tileSize + "px (" + (maxX - minX + 1) * (maxY - minY + 1) + " tiles)" + ((maxX - minX + 1) * (maxY - minY + 1) > 500 ? " — large! may be slow" : "")}
+            {(function() {
+              var c = maxX - minX + 1, r = maxY - minY + 1, t = c * r;
+              var ow = (transpose ? r : c) * tileSize, oh = (transpose ? c : r) * tileSize;
+              return "Output: " + ow + "x" + oh + "px (" + t + " tiles)" + (t > 500 ? " — large! may be slow" : "");
+            })()}
           </p>
           <div style={{display: "flex", gap: 6, marginTop: 10}}>
             <button onClick={testOneTile} disabled={!tilePattern} style={Object.assign({}, S.btn, {flex: 1, background: "#d97706", color: "#fff"})}>Test 1</button>
@@ -432,7 +450,7 @@ export default function Home() {
         {gridPreview && <div style={S.card}>
           <p style={S.sec}>4x4 Grid Preview (center of map):</p>
           <p style={{fontSize: "0.7rem", color: "#888", marginBottom: 8}}>
-            If tiles are scrambled, try toggling Swap XY or Flip options, then tap 4x4 again.
+            If tiles are scrambled, try toggling Swap XY, Transpose, or Flip options, then tap 4x4 again.
           </p>
           <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 2, background: "#000", borderRadius: 6, overflow: "hidden"}}>
             {gridPreview.flat().map(function(tile, i) { return (
