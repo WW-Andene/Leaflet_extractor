@@ -540,7 +540,7 @@ export default function EditorTab() {
             style={Object.assign({}, S.sm, dlFormat === f ? {background: "#3b82f6"} : {})}>{f.toUpperCase()}</button>;
         })}
         <p style={{fontSize: "0.72rem", color: "#888", marginLeft: 8}}>Scale:</p>
-        {[0.25, 0.5, 1].map(function(sc) {
+        {[0.5, 1, 2].map(function(sc) {
           return <button key={sc} onClick={function(){setDlScale(sc)}}
             style={Object.assign({}, S.sm, dlScale === sc ? {background: "#3b82f6"} : {})}>{sc + "x"}</button>;
         })}
