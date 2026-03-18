@@ -1,13 +1,11 @@
 import { useState, useRef, useCallback } from "react";
+import JSZip from "jszip";
 
 var MAX_TILES = 8192;
 
-var COORD_ORDERS = ["zxy", "zyx", "xzy", "xyz", "yzx", "yxz"];
-
-function buildUrl(pat, z, x, y, order) {
-  var o = order || "zxy";
-  var v = { z: z, x: x, y: y };
-  return pat.replace("{z}", v[o[0]]).replace("{x}", v[o[1]]).replace("{y}", v[o[2]]);
+function buildUrl(pat, z, x, y, swapXY) {
+  if (swapXY) return pat.replace("{z}", z).replace("{x}", y).replace("{y}", x);
+  return pat.replace("{z}", z).replace("{x}", x).replace("{y}", y);
 }
 function tileKey(src, x, y) { return src + ":" + x + "," + y; }
 
@@ -397,6 +395,103 @@ export default function EditorTab() {
     }
   }
 
+  async function exportTiles() {
+    var tSize = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
+    var scale = dlScale;
+    var outSize = Math.round(tSize * scale);
+    var fmt = dlFormat;
+    var mimeType = fmt === "jpeg" ? "image/jpeg" : "image/png";
+    var ext = fmt === "jpeg" ? "jpg" : "png";
+    var quality = fmt === "jpeg" ? 0.92 : undefined;
+
+    // Find bounding box
+    var bMinX = gridW, bMaxX = 0, bMinY = gridH, bMaxY = 0;
+    var filled = [];
+    for (var i = 0; i < grid.length; i++) {
+      if (grid[i]) {
+        var gx = i % gridW, gy = Math.floor(i / gridW);
+        if (gx < bMinX) bMinX = gx; if (gx > bMaxX) bMaxX = gx;
+        if (gy < bMinY) bMinY = gy; if (gy > bMaxY) bMaxY = gy;
+        filled.push({ cell: grid[i], gx: gx, gy: gy });
+      }
+    }
+    if (filled.length === 0) { setDlStatus("Grid is empty!"); return; }
+
+    setDlStatus("Exporting " + filled.length + " tiles as " + outSize + "px " + fmt.toUpperCase() + "...");
+    var zip = new JSZip();
+    var tileCanvas = document.createElement("canvas");
+    tileCanvas.width = outSize; tileCanvas.height = outSize;
+    var tileCtx = tileCanvas.getContext("2d");
+    var done = 0, failed = 0;
+
+    for (var j = 0; j < filled.length; j++) {
+      var f = filled[j];
+      var tileX = f.gx - bMinX;
+      var tileY = f.gy - bMinY;
+      try {
+        var img = await new Promise(function(res) {
+          var im = new Image();
+          im.crossOrigin = "anonymous";
+          im.onload = function() { res(im); };
+          im.onerror = function() { res(null); };
+          im.src = f.cell.dataUrl;
+        });
+        if (!img) { failed++; continue; }
+        tileCtx.clearRect(0, 0, outSize, outSize);
+        tileCtx.fillStyle = "#000";
+        tileCtx.fillRect(0, 0, outSize, outSize);
+        tileCtx.drawImage(img, 0, 0, outSize, outSize);
+        var blob = await new Promise(function(res) {
+          tileCanvas.toBlob(function(b) { res(b); }, mimeType, quality);
+        });
+        if (blob) {
+          zip.file(tileX + "_" + tileY + "." + ext, blob);
+          done++;
+        } else { failed++; }
+      } catch (e) { failed++; }
+      if ((j + 1) % 50 === 0 || j === filled.length - 1) {
+        setDlStatus("Exporting: " + (j + 1) + "/" + filled.length + " (" + failed + " failed)");
+        await wait(10);
+      }
+    }
+
+    // Add a Leaflet viewer HTML
+    var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
+    var viewerHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+      + '<title>Tile Map Viewer</title>'
+      + '<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9/dist/leaflet.css"/>'
+      + '<script src="https://unpkg.com/leaflet@1.9/dist/leaflet.js"><\/script>'
+      + '<style>body{margin:0}#map{height:100vh}</style></head><body><div id="map"></div><script>'
+      + 'var map=L.map("map",{crs:L.CRS.Simple,minZoom:-3,maxZoom:2}).setView([' + Math.round(cropH / 2) + ',' + Math.round(cropW / 2) + '],0);'
+      + 'var bounds=[[0,0],[' + cropH + ',' + cropW + ']];'
+      + 'L.tileLayer("tiles/{x}_{y}.' + ext + '",{tileSize:' + outSize + ',noWrap:true,bounds:bounds}).addTo(map);'
+      + 'map.fitBounds(bounds);'
+      + '<\/script></body></html>';
+    zip.file("viewer.html", viewerHtml);
+
+    // Add info file
+    zip.file("info.txt",
+      "Tile Export\n"
+      + "Tiles: " + done + " (" + cropW + "x" + cropH + " grid)\n"
+      + "Tile size: " + outSize + "px\n"
+      + "Format: " + fmt.toUpperCase() + "\n"
+      + "Total image: " + (cropW * outSize) + "x" + (cropH * outSize) + "px\n"
+      + "Naming: {x}_{y}." + ext + " (0-indexed from top-left)\n"
+      + "\nTo use in Leaflet: open viewer.html, tiles must be in a 'tiles/' subfolder.\n"
+    );
+
+    setDlStatus("Compressing zip (" + done + " tiles)...");
+    var zipBlob = await zip.generateAsync({ type: "blob", compression: "STORE" });
+    var sizeMB = (zipBlob.size / (1024 * 1024)).toFixed(1);
+    var dl = document.createElement("a");
+    var blobUrl = URL.createObjectURL(zipBlob);
+    dl.href = blobUrl;
+    dl.download = "tilemap_" + cropW + "x" + cropH + "_" + outSize + "px." + "zip";
+    dl.click();
+    setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 10000);
+    setDlStatus("Exported " + done + " tiles | " + sizeMB + "MB zip | " + outSize + "px " + fmt.toUpperCase());
+  }
+
   function clearGrid() { setGrid(new Array(GRID_W * GRID_H).fill(null)); setSwapFirst(null); }
   function clearBank() {
     var bank = bankRef.current;
@@ -590,9 +685,10 @@ export default function EditorTab() {
         </p>;
       })()}
       <div style={{display: "flex", gap: 6, flexWrap: "wrap"}}>
-        <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#059669"})}>Download</button>
-        <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#7f1d1d"})}>Clear Grid</button>
-        <button onClick={clearBank} style={Object.assign({}, S.btn, {flex: 1, minWidth: 90, background: "#991b1b"})}>Clear Bank</button>
+        <button onClick={downloadGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 80, background: "#059669"})}>Image</button>
+        <button onClick={exportTiles} style={Object.assign({}, S.btn, {flex: 1, minWidth: 80, background: "#7c3aed"})}>Tiles ZIP</button>
+        <button onClick={clearGrid} style={Object.assign({}, S.btn, {flex: 1, minWidth: 80, background: "#7f1d1d"})}>Clear Grid</button>
+        <button onClick={clearBank} style={Object.assign({}, S.btn, {flex: 1, minWidth: 80, background: "#991b1b"})}>Clear Bank</button>
       </div>
     </div>
     {dlStatus && <p style={Object.assign({}, S.st, {textAlign: "center"})}>{dlStatus}</p>}
