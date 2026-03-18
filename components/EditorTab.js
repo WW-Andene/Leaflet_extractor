@@ -174,7 +174,8 @@ export default function EditorTab() {
   function autoPlace(idx) {
     var src = sources[idx]; var bank = bankRef.current;
     var srcCols = src.maxX - src.minX + 1, srcRows = src.maxY - src.minY + 1;
-    var placeCols = src.swapXY ? srcRows : srcCols, placeRows = src.swapXY ? srcCols : srcRows;
+    // swapXY only affects URL building (in loadSource), NOT grid placement
+    var placeCols = srcCols, placeRows = srcRows;
     var oldW = gridW, oldH = gridH, oldGrid = grid;
     var hasContent = false, exMinX = oldW, exMaxX = 0, exMinY = oldH, exMaxY = 0;
     for (var i = 0; i < oldGrid.length; i++) {
@@ -198,9 +199,9 @@ export default function EditorTab() {
     for (var dy = 0; dy < srcRows; dy++) for (var dx = 0; dx < srcCols; dx++) {
       var tileX = src.minX + dx, tileY = src.minY + dy;
       var key = tileKey(idx, tileX, tileY); if (!bank[key]) continue;
-      var gx2, gy2;
-      if (src.swapXY) { gx2 = src.flipX ? (srcRows - 1 - dy) : dy; gy2 = src.flipY ? (srcCols - 1 - dx) : dx; }
-      else { gx2 = src.flipX ? (srcCols - 1 - dx) : dx; gy2 = src.flipY ? (srcRows - 1 - dy) : dy; }
+      // Same as Stitch tab: flip only, no swap (swap already handled in URL)
+      var gx2 = src.flipX ? (srcCols - 1 - dx) : dx;
+      var gy2 = src.flipY ? (srcRows - 1 - dy) : dy;
       var gi = (offY + gy2) * newW + (offX + gx2);
       if (gi >= 0 && gi < ng.length) ng[gi] = { key: key, dataUrl: bank[key], srcIdx: idx, ox: tileX, oy: tileY };
     }
