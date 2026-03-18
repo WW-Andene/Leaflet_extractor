@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
+    "@sparticuz/chromium": "^143.0.4",
     "@sparticuz/chromium-min": "^143.0.4",
     "next": "latest",
     "puppeteer-core": "^24.39.1",

@@ -4,5 +4,8 @@
       "maxDuration": 60,
       "memory": 1024
     }
+  },
+  "env": {
+    "AWS_LAMBDA_JS_RUNTIME": "nodejs22.x"
   }
 }

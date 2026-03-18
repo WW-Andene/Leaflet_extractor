@@ -3,9 +3,6 @@ import puppeteer from "puppeteer-core";
 
 export const maxDuration = 60;
 
-const CHROMIUM_URL =
-  "https://github.com/nicholasgasior/chromium-headless-lambda-layer/releases/download/v126.0.0/chromium-v126.0.0-pack.tar";
-
 export default async function handler(req, res) {
   const { url, maxZoom } = req.query;
   const targetUrl = url || "https://wuthering.th.gl/maps/Overworld";
@@ -14,13 +11,20 @@ export default async function handler(req, res) {
   let browser = null;
 
   try {
-    const execPath = await chromium.executablePath(CHROMIUM_URL);
+    // Build the URL to the chromium pack tar
+    const host = process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : `http://localhost:${process.env.PORT || 3000}`;
+    const chromiumPackUrl = `${host}/chromium-pack.tar`;
+
+    const execPath = await chromium.executablePath(chromiumPackUrl);
 
     browser = await puppeteer.launch({
-      args: chromium.args,
+      args: [...chromium.args, "--hide-scrollbars", "--disable-web-security"],
       defaultViewport: { width: 1920, height: 1080 },
       executablePath: execPath,
-      headless: chromium.headless,
+      headless: "shell",
+      ignoreHTTPSErrors: true,
     });
 
     const page = await browser.newPage();
@@ -54,10 +58,10 @@ export default async function handler(req, res) {
       }
     });
 
-    await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 30000 });
+    await page.goto(targetUrl, { waitUntil: "networkidle2", timeout: 25000 });
     await new Promise((r) => setTimeout(r, 3000));
 
-    // Extract from Leaflet instance
+    // Extract Leaflet info from the page
     const leafletInfo = await page.evaluate(() => {
       const result = { tileUrls: [], patterns: [], mapInfo: null, canvasCount: 0 };
       result.canvasCount = document.querySelectorAll("canvas").length;
@@ -92,7 +96,7 @@ export default async function handler(req, res) {
     leafletInfo.tileUrls.forEach((u) => tileUrls.add(u));
     leafletInfo.patterns.forEach((p) => tilePatterns.add(p));
 
-    // Zoom through levels
+    // Zoom through levels to capture tiles
     for (let z = 1; z <= Math.min(targetZoom, 7); z++) {
       await page.evaluate((zl) => {
         for (const key of Object.keys(window)) {
@@ -169,7 +173,7 @@ export default async function handler(req, res) {
       url: targetUrl,
     });
   } catch (e) {
-    if (browser) await browser.close();
+    if (browser) try { await browser.close(); } catch (_) {}
     res.status(500).json({ success: false, error: e.message });
   }
 }
