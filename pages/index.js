@@ -318,7 +318,7 @@ export default function Home() {
         <div style={S.card}>
           <p style={S.sec}>Tile Settings</p>
           <input value={tilePattern} onChange={function(e){setTilePattern(e.target.value)}}
-            placeholder="https://.../{z}/{x}/{y}.png" style={S.input} />
+            placeholder="https://.../{z}/{x}/{y}.png or tile-{x}_{y}.jpg" style={S.input} />
           <div style={S.g3}>
             <div><p style={S.ml}>Zoom</p><input type="number" value={zoom} onChange={function(e){setZoom(+e.target.value)}} style={S.si} /></div>
             <div><p style={S.ml}>Tile px</p><input type="number" value={tileSize} onChange={function(e){setTileSize(+e.target.value)}} style={S.si} /></div>
