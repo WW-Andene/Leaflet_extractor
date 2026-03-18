@@ -1,8 +1,21 @@
 export default async function handler(req, res) {
-  const { url } = req.query;
+  const { url, check } = req.query;
 
   if (!url) {
     return res.status(400).json({ error: "Missing ?url= parameter" });
+  }
+
+  // Check mode: return metadata only
+  if (check === "1") {
+    try {
+      const response = await fetch(url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36", Accept: "image/*,*/*" },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!response.ok) return res.json({ ok: false, status: response.status, size: 0 });
+      const buf = Buffer.from(await response.arrayBuffer());
+      return res.json({ ok: true, status: 200, size: buf.byteLength, contentType: response.headers.get("content-type") || "" });
+    } catch (e) { return res.json({ ok: false, error: e.message, size: 0 }); }
   }
 
   // Try up to 3 times

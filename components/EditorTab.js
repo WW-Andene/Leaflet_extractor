@@ -126,18 +126,36 @@ export default function EditorTab() {
     setDetecting(false);
   }
 
-  function showSrcPreview(idx) {
+  async function showSrcPreview(idx) {
     var src = sources[idx]; if (!src.pattern) return;
+    setLoadStatus("Loading 4x4 preview...");
     var cx = Math.round((src.minX + src.maxX) / 2), cy = Math.round((src.minY + src.maxY) / 2);
-    var rows = [];
+    var tiles = [];
     for (var dy = -1; dy <= 2; dy++) {
-      var row = [];
       for (var dx = -1; dx <= 2; dx++) {
         var x = cx + dx, y = cy + dy;
-        row.push({ x: x, y: y, url: "/api/tile-proxy?url=" + encodeURIComponent(buildUrl(src.pattern, src.zoom, x, y, src.coordOrder)), label: "x=" + x + " y=" + y });
+        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.coordOrder);
+        tiles.push({ x: x, y: y, rawUrl: rawUrl, url: "/api/tile-proxy?url=" + encodeURIComponent(rawUrl), label: "x=" + x + " y=" + y });
+      }
+    }
+    var checks = await Promise.all(tiles.map(function(t) {
+      return fetch("/api/tile-proxy?check=1&url=" + encodeURIComponent(t.rawUrl))
+        .then(function(r) { return r.json(); })
+        .catch(function() { return { ok: false, size: 0 }; });
+    }));
+    var rows = [];
+    for (var i = 0; i < 4; i++) {
+      var row = [];
+      for (var j = 0; j < 4; j++) {
+        var ti = i * 4 + j;
+        tiles[ti].size = checks[ti].size || 0;
+        tiles[ti].exists = checks[ti].ok && checks[ti].size > 2000;
+        row.push(tiles[ti]);
       }
       rows.push(row);
     }
+    var loaded = tiles.filter(function(t) { return t.exists; }).length;
+    setLoadStatus("4x4: " + loaded + "/16 tiles have content. Red = empty/placeholder.");
     setSrcPreview({ rows: rows, srcIdx: idx });
   }
 
@@ -311,11 +329,12 @@ export default function EditorTab() {
     {srcPreview && <div style={S.card}>
       <p style={S.sec}>{"4x4 Preview (Source " + (srcPreview.srcIdx + 1) + ")"}</p>
       <p style={{fontSize: "0.68rem", color: "#888", marginBottom: 6}}>If wrong, cycle Order or toggle Transpose/Flip, tap 4x4 again.</p>
-      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 1, background: "#000", borderRadius: 6, overflow: "hidden"}}>
+      <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 2, background: "#000", borderRadius: 6, overflow: "hidden"}}>
         {srcPreview.rows.flat().map(function(tile, i) {
-          return <div key={i} style={{position: "relative", background: "#0a0a0f"}}>
-            <img src={tile.url} style={{width: "100%", display: "block"}} alt={tile.label} onError={function(e){e.target.style.opacity = 0.1}} />
-            <div style={{position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.7)", color: "#6ee7b7", fontSize: "0.42rem", padding: "1px 2px", textAlign: "center"}}>{tile.label}</div>
+          return <div key={i} style={{position: "relative", background: "#0a0a0f", border: tile.exists ? "2px solid #059669" : "2px solid #dc2626"}}>
+            {tile.exists && <img src={tile.url} style={{width: "100%", display: "block"}} alt={tile.label} onError={function(e){e.target.style.opacity = 0.1}} />}
+            {!tile.exists && <div style={{width: "100%", aspectRatio: "1", display: "flex", alignItems: "center", justifyContent: "center", color: "#dc2626", fontSize: "1.1rem", fontWeight: 700}}>X</div>}
+            <div style={{position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.8)", color: tile.exists ? "#6ee7b7" : "#f87171", fontSize: "0.38rem", padding: "1px 2px", textAlign: "center"}}>{tile.label + " " + (tile.size > 0 ? Math.round(tile.size / 1024) + "K" : "0")}</div>
           </div>;
         })}
       </div>

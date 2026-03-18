@@ -59,8 +59,12 @@ function build(pattern, z, x, y) {
 async function findBounds(pattern, zoom, knownX, knownY) {
   const bounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
 
-  var knownOk = await testTileUrl(build(pattern, zoom, knownX, knownY));
-  if (!knownOk) return { ...bounds, error: "Known tile failed", testedUrl: build(pattern, zoom, knownX, knownY) };
+  // Measure the known-good tile to set reference size
+  var knownUrl = build(pattern, zoom, knownX, knownY);
+  refTileSize = await measureTile(knownUrl);
+  if (refTileSize < 500) return { ...bounds, error: "Known tile too small or failed", testedUrl: knownUrl };
+
+  var knownOk = refTileSize > 0;
 
   // Binary search helper: find max value where tile exists
   async function searchMax(axis, fixed, start, limit) {
@@ -123,19 +127,47 @@ async function findBounds(pattern, zoom, knownX, knownY) {
     }
   }
 
-  return { ...bounds, zoomInfo };
+  return { ...bounds, zoomInfo, refTileSize };
 }
+
+// Reference size set after first known-good tile
+var refTileSize = 0;
 
 async function testTileUrl(url) {
   try {
-    const r = await fetch(url, { method: "HEAD", headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(3000) });
-    if (r.ok) {
-      const ct = r.headers.get("content-type") || "";
-      const cl = parseInt(r.headers.get("content-length") || "0");
-      return ct.includes("image") || cl > 500;
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return false;
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.includes("image") && !ct.includes("octet")) return false;
+    // Get actual content size
+    const buf = await r.arrayBuffer();
+    const size = buf.byteLength;
+    // If we have a reference size, reject tiles that are tiny compared to it
+    // (CDN placeholder tiles are typically <2KB, real tiles are 5-100KB)
+    if (refTileSize > 0) {
+      // Tile must be at least 15% of reference size or >3KB
+      if (size < 3000 && size < refTileSize * 0.15) return false;
+    } else {
+      // No reference yet — just basic size check
+      if (size < 500) return false;
     }
-    return false;
+    return true;
   } catch (e) { return false; }
+}
+
+async function measureTile(url) {
+  try {
+    const r = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" },
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!r.ok) return 0;
+    const buf = await r.arrayBuffer();
+    return buf.byteLength;
+  } catch (e) { return 0; }
 }
 
 async function deepScanPage(targetUrl, res) {
