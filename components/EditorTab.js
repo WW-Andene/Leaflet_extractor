@@ -445,7 +445,7 @@ export default function EditorTab() {
           tileCanvas.toBlob(function(b) { res(b); }, mimeType, quality);
         });
         if (blob) {
-          zip.file(tileX + "_" + tileY + "." + ext, blob);
+          zip.file("tiles/" + tileX + "_" + tileY + "." + ext, blob);
           done++;
         } else { failed++; }
       } catch (e) { failed++; }
@@ -455,7 +455,7 @@ export default function EditorTab() {
       }
     }
 
-    // Add a Leaflet viewer HTML
+    // Add a Leaflet viewer HTML — self-contained, loads tiles from tiles/ subfolder
     var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
     var viewerHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
       + '<title>Tile Map Viewer</title>'
@@ -469,15 +469,50 @@ export default function EditorTab() {
       + '<\/script></body></html>';
     zip.file("viewer.html", viewerHtml);
 
+    // Render merged full image into zip
+    setDlStatus("Rendering merged image...");
+    await wait(10);
+    var mergeW = cropW * outSize, mergeH = cropH * outSize;
+    var canMerge = mergeW <= 16384 && mergeH <= 16384 && mergeW * mergeH <= 268000000;
+    if (canMerge) {
+      try {
+        var mc = document.createElement("canvas"); mc.width = mergeW; mc.height = mergeH;
+        var mctx = mc.getContext("2d");
+        if (mctx) {
+          mctx.fillStyle = "#000"; mctx.fillRect(0, 0, mergeW, mergeH);
+          for (var k = 0; k < filled.length; k++) {
+            var ff = filled[k];
+            var mimg = await new Promise(function(res) {
+              var im = new Image(); im.crossOrigin = "anonymous";
+              im.onload = function() { res(im); }; im.onerror = function() { res(null); };
+              im.src = ff.cell.dataUrl;
+            });
+            if (mimg) mctx.drawImage(mimg, (ff.gx - bMinX) * outSize, (ff.gy - bMinY) * outSize, outSize, outSize);
+            if ((k + 1) % 100 === 0) { setDlStatus("Merged: " + (k + 1) + "/" + filled.length); await wait(5); }
+          }
+          var mergeBlob = await new Promise(function(res) { mc.toBlob(function(b) { res(b); }, mimeType, quality); });
+          if (mergeBlob) {
+            zip.file("merged." + ext, mergeBlob);
+            setDlStatus("Merged image added (" + (mergeBlob.size / (1024*1024)).toFixed(1) + "MB)");
+          }
+        }
+      } catch (e) { /* merged image failed, tiles still fine */ }
+    }
+
     // Add info file
     zip.file("info.txt",
-      "Tile Export\n"
-      + "Tiles: " + done + " (" + cropW + "x" + cropH + " grid)\n"
+      "Tile Map Export\n"
+      + "===============\n"
+      + "Tiles: " + done + " (" + cropW + " x " + cropH + " grid)\n"
       + "Tile size: " + outSize + "px\n"
       + "Format: " + fmt.toUpperCase() + "\n"
-      + "Total image: " + (cropW * outSize) + "x" + (cropH * outSize) + "px\n"
-      + "Naming: {x}_{y}." + ext + " (0-indexed from top-left)\n"
-      + "\nTo use in Leaflet: open viewer.html, tiles must be in a 'tiles/' subfolder.\n"
+      + "Total image: " + (cropW * outSize) + " x " + (cropH * outSize) + "px\n"
+      + "\nFiles:\n"
+      + "  tiles/          - individual tile images ({x}_{y}." + ext + ", 0-indexed)\n"
+      + "  merged." + ext + "     - full map as one image" + (canMerge ? "" : " (too large, not included)") + "\n"
+      + "  viewer.html     - Leaflet map viewer (needs web server)\n"
+      + "\nFor app integration:\n"
+      + "  Serve tiles/ folder, use: L.tileLayer('path/to/tiles/{x}_{y}." + ext + "', {tileSize: " + outSize + "})\n"
     );
 
     setDlStatus("Compressing zip (" + done + " tiles)...");
