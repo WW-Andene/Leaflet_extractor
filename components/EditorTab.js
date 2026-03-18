@@ -185,11 +185,13 @@ export default function EditorTab() {
     }
     var offX, offY, newW, newH;
     if (!hasContent) {
-      newW = Math.max(oldW, placeCols + 4); newH = Math.max(oldH, placeRows + 4);
-      offX = Math.max(0, Math.floor((newW - placeCols) / 2)); offY = Math.max(0, Math.floor((newH - placeRows) / 2));
+      // Exact fit like Stitch tab — no padding
+      newW = placeCols; newH = placeRows;
+      offX = 0; offY = 0;
     } else {
-      offX = exMaxX + 2; offY = exMinY;
-      if (offX + placeCols > Math.max(oldW, exMaxX + 2 + placeCols) + 4) { offX = exMinX; offY = exMaxY + 2; }
+      // Place adjacent: right side with 1-tile gap, or below if too wide
+      offX = exMaxX + 1; offY = exMinY;
+      if (offX + placeCols > oldW + placeCols + 2) { offX = exMinX; offY = exMaxY + 1; }
       newW = Math.max(oldW, offX + placeCols); newH = Math.max(oldH, offY + placeRows);
     }
     if (newW * newH > MAX_TILES) { offX = 0; offY = 0; newW = Math.max(oldW, placeCols); newH = Math.max(oldH, placeRows); }
