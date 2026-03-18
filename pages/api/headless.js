@@ -11,13 +11,9 @@ export default async function handler(req, res) {
   let browser = null;
 
   try {
-    // Build the URL to the chromium pack tar
-    const host = process.env.VERCEL_URL
-      ? `https://${process.env.VERCEL_URL}`
-      : `http://localhost:${process.env.PORT || 3000}`;
-    const chromiumPackUrl = `${host}/chromium-pack.tar`;
-
-    const execPath = await chromium.executablePath(chromiumPackUrl);
+    const execPath = await chromium.executablePath(
+      "https://github.com/Sparticuz/chromium/releases/download/v131.0.1/chromium-v131.0.1-pack.tar"
+    );
 
     browser = await puppeteer.launch({
       args: [...chromium.args, "--hide-scrollbars", "--disable-web-security"],
