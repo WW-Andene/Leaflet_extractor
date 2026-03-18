@@ -46,6 +46,11 @@ export default function Home() {
   const [probing, setProbing] = useState(false);
   const [selectedMap, setSelectedMap] = useState("AkiWorld_WP");
   const [jsFindings, setJsFindings] = useState([]);
+  const [headlessUrl, setHeadlessUrl] = useState("https://wuthering.th.gl/maps/Overworld");
+  const [headlessZoom, setHeadlessZoom] = useState(5);
+  const [headlessLoading, setHeadlessLoading] = useState(false);
+  const [headlessStatus, setHeadlessStatus] = useState("");
+  const [headlessResults, setHeadlessResults] = useState(null);
 
   // --- EXTRACT ---
   async function extract() {
@@ -94,6 +99,25 @@ export default function Home() {
       setStitchStatus("Probe error: " + e.message);
     }
     setProbing(false);
+  }
+
+  // --- HEADLESS BROWSER ---
+  async function runHeadless() {
+    setHeadlessLoading(true); setHeadlessResults(null);
+    setHeadlessStatus("Launching headless Chrome on server...");
+    try {
+      const r = await fetch("/api/headless?url=" + encodeURIComponent(headlessUrl) + "&maxZoom=" + headlessZoom);
+      const d = await r.json();
+      if (d.success) {
+        setHeadlessResults(d);
+        setHeadlessStatus("Done! Found " + d.patterns.length + " patterns, " + d.totalTiles + " tiles across " + Object.keys(d.analysis.zooms).length + " zoom levels");
+      } else {
+        setHeadlessStatus("Error: " + d.error);
+      }
+    } catch (e) {
+      setHeadlessStatus("Error: " + e.message);
+    }
+    setHeadlessLoading(false);
   }
 
   // --- STITCH ---
@@ -193,6 +217,79 @@ export default function Home() {
       </>}
 
       {tab === "stitch" && <>
+        {/* HEADLESS BROWSER - THE REAL DEAL */}
+        <div style={{...S.card, borderColor: "#7c3aed"}}>
+          <p style={{...S.sec, color: "#a78bfa"}}>🚀 Headless Browser (Best Method)</p>
+          <p style={{fontSize: "0.72rem", color: "#888", marginBottom: 8}}>
+            Runs the actual map page in a headless Chrome on the server. Zooms through levels, intercepts all tile requests. Finds the real URLs.
+          </p>
+          <div style={S.presets}>
+            {[
+              { label: "TH.GL Overworld", url: "https://wuthering.th.gl/maps/Overworld" },
+              { label: "TH.GL Lahai-Roi", url: "https://wuthering.th.gl/maps/Lahai-Roi" },
+              { label: "Appsample Main", url: "https://wuthering-waves-map.appsample.com/" },
+              { label: "wuthering.gg", url: "https://wuthering.gg/map" },
+              { label: "wuthering.gg Rinascita", url: "https://wuthering.gg/map/rinascita" },
+            ].map(p => (
+              <button key={p.url} onClick={() => setHeadlessUrl(p.url)}
+                style={{...S.chip, ...(headlessUrl === p.url ? S.chipOn : {})}}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <div style={{display: "flex", gap: 8, marginTop: 8}}>
+            <input value={headlessUrl} onChange={e => setHeadlessUrl(e.target.value)}
+              placeholder="Map page URL..." style={{...S.input, flex: 1, marginBottom: 0}} />
+            <input type="number" value={headlessZoom} onChange={e => setHeadlessZoom(+e.target.value)}
+              style={{...S.si, width: 60}} placeholder="Zoom" />
+          </div>
+          <button onClick={runHeadless} disabled={headlessLoading}
+            style={{...S.btn, marginTop: 8, ...(headlessLoading ? S.off : {background: "#7c3aed", color: "#fff"})}}>
+            {headlessLoading ? "Running headless Chrome... (up to 60s)" : "🚀 Run Headless Browser"}
+          </button>
+          {headlessStatus && <p style={S.st}>{headlessStatus}</p>}
+
+          {headlessResults && <>
+            {headlessResults.patterns.length > 0 && <>
+              <p style={{...S.sec, marginTop: 12}}>✅ Tile Patterns ({headlessResults.patterns.length}):</p>
+              {headlessResults.patterns.map((p, i) => <div key={i} style={S.mono}>{p}</div>)}
+            </>}
+            {headlessResults.analysis && Object.keys(headlessResults.analysis.zooms).length > 0 && <>
+              <p style={{...S.sec, marginTop: 12}}>📊 Zoom Analysis:</p>
+              <div style={S.mono}>
+                {Object.entries(headlessResults.analysis.zooms).map(([z, info]) => (
+                  <div key={z}>z={z}: x=[{info.minX}-{info.maxX}] y=[{info.minY}-{info.maxY}] ({info.count} tiles)</div>
+                ))}
+                <div style={{marginTop: 4, color: "#fbbf24"}}>Max zoom found: {headlessResults.analysis.maxZoomFound}</div>
+              </div>
+            </>}
+            {headlessResults.tiles.length > 0 && <>
+              <p style={{...S.sec, marginTop: 12}}>🧩 Sample Tiles ({headlessResults.totalTiles} total):</p>
+              <div style={{...S.mono, maxHeight: 180, overflowY: "auto"}}>
+                {headlessResults.tiles.slice(0, 30).map((t, i) => <div key={i}>{t}</div>)}
+              </div>
+            </>}
+            <div style={{display: "flex", gap: 8, marginTop: 10}}>
+              <button onClick={() => {
+                const text = "PATTERNS:\n" + headlessResults.patterns.join("\n") + "\n\nTILES:\n" + headlessResults.tiles.join("\n");
+                navigator.clipboard.writeText(text).catch(() => {});
+              }} style={{...S.btn, flex: 1, background: "#059669", color: "#fff"}}>Copy</button>
+              <button onClick={() => {
+                if (headlessResults.patterns[0]) setTilePattern(headlessResults.patterns[0]);
+                if (headlessResults.analysis) {
+                  const maxZ = headlessResults.analysis.maxZoomFound;
+                  const zInfo = headlessResults.analysis.zooms[maxZ];
+                  if (zInfo) {
+                    setZoom(maxZ);
+                    setMinX(zInfo.minX); setMaxX(zInfo.maxX);
+                    setMinY(zInfo.minY); setMaxY(zInfo.maxY);
+                  }
+                }
+              }} style={{...S.btn, flex: 1, background: "#d97706", color: "#fff"}}>Fill Stitcher ↓</button>
+            </div>
+          </>}
+        </div>
+
         {/* AUTO PROBE SECTION */}
         <div style={S.card}>
           <p style={S.sec}>Auto Probe (TH.GL CDN)</p>
