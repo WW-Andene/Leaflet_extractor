@@ -37,6 +37,9 @@ export default function Home() {
   const [swapXY, setSwapXY] = useState(false);
   const [gridPreview, setGridPreview] = useState(null);
   const [probeImg, setProbeImg] = useState(null);
+  const [failedTiles, setFailedTiles] = useState([]);
+  const [canvasCtx, setCanvasCtx] = useState(null);
+  const [canvasEl, setCanvasEl] = useState(null);
   const [probing, setProbing] = useState(false);
   const [probeResults, setProbeResults] = useState(null);
 
@@ -145,7 +148,7 @@ export default function Home() {
 
   async function stitch() {
     if (!tilePattern || stitching) return;
-    setStitching(true); setPreviewUrl(null); setStitchProgress(0);
+    setStitching(true); setPreviewUrl(null); setStitchProgress(0); setFailedTiles([]);
     const cols = maxX - minX + 1, rows = maxY - minY + 1;
     const total = cols * rows, W = cols * tileSize, H = rows * tileSize;
     setStitchStatus("Stitching " + W + "x" + H + "px (" + total + " tiles)...");
@@ -153,45 +156,71 @@ export default function Home() {
     c.width = W; c.height = H;
     const ctx = c.getContext("2d");
     ctx.fillStyle = "#0a0a0f"; ctx.fillRect(0, 0, W, H);
-    let done = 0, fail = 0;
+    setCanvasCtx(ctx); setCanvasEl(c);
+
     const all = [];
     for (let y = minY; y <= maxY; y++)
       for (let x = minX; x <= maxX; x++) all.push({ x, y });
 
-    // Small batches + delay to avoid rate limiting
-    const batch = 3;
-    const delayMs = 200;
+    const { done, failed } = await downloadTiles(all, ctx, total);
 
-    for (let i = 0; i < all.length; i += batch) {
-      const b = all.slice(i, i + batch);
+    setFailedTiles(failed);
+    setStitchStatus("Done! " + done + "/" + total + " tiles." + (failed.length > 0 ? " " + failed.length + " failed — tap Retry" : " ✅"));
+    c.toBlob(blob => { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
+    setStitching(false);
+  }
+
+  async function retryFailed() {
+    if (!canvasCtx || !canvasEl || failedTiles.length === 0 || stitching) return;
+    setStitching(true); setStitchProgress(0);
+    const total = failedTiles.length;
+    setStitchStatus("Retrying " + total + " failed tiles (slower, 1 at a time)...");
+
+    const { done, failed } = await downloadTiles(failedTiles, canvasCtx, total, true);
+
+    setFailedTiles(failed);
+    setStitchStatus("Retry done! " + done + " recovered." + (failed.length > 0 ? " " + failed.length + " still failing — tap Retry again" : " ✅ All tiles loaded!"));
+    canvasEl.toBlob(blob => { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
+    setStitching(false);
+  }
+
+  async function downloadTiles(tiles, ctx, total, slow) {
+    let done = 0;
+    const failed = [];
+    const batchSize = slow ? 1 : 2;
+    const delayMs = slow ? 800 : 300;
+    const maxRetries = slow ? 5 : 3;
+
+    for (let i = 0; i < tiles.length; i += batchSize) {
+      const b = tiles.slice(i, i + batchSize);
       await Promise.all(b.map(async ({ x, y }) => {
         const rawUrl = buildUrl(tilePattern, zoom, x, y);
         const u = proxied(rawUrl);
 
-        // Try up to 3 times
         let img = null;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < maxRetries; attempt++) {
           img = await loadImg(u);
           if (img) break;
-          // Wait before retry, longer each time
-          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+          await new Promise(r => setTimeout(r, 600 * (attempt + 1)));
         }
 
         if (img) {
           const px = (flipX ? (maxX - x) : (x - minX)) * tileSize;
           const py = (flipY ? (maxY - y) : (y - minY)) * tileSize;
-          ctx.drawImage(img, px, py, tileSize, tileSize); done++;
+          ctx.drawImage(img, px, py, tileSize, tileSize);
+          done++;
+        } else {
+          failed.push({ x, y });
         }
-        else fail++;
       }));
 
-      // Delay between batches to avoid rate limit
       await new Promise(r => setTimeout(r, delayMs));
-      setStitchProgress(Math.round(((i + b.length) / all.length) * 100));
-      setStitchStatus(done + "/" + total + " loaded (" + fail + " failed)");
+      setStitchProgress(Math.round(((i + b.length) / tiles.length) * 100));
+      setStitchStatus((slow ? "Retry: " : "") + (done + failed.length) + "/" + total + " (" + failed.length + " failed)");
     }
-    setStitchStatus("Done! " + done + "/" + total + " tiles. " + W + "x" + H + "px" + (fail > 0 ? " (" + fail + " failed)" : " ✅"));
-    c.toBlob(blob => { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
+
+    return { done, failed };
+  }
     setStitching(false);
   }
 
@@ -328,8 +357,16 @@ export default function Home() {
         {previewUrl && <div style={S.card}>
           <p style={S.sec}>Stitched Map:</p>
           <img src={previewUrl} style={{maxWidth: "100%", borderRadius: 6, border: "1px solid #333"}} alt="map" />
-          <button onClick={() => { const a = document.createElement("a"); a.href = previewUrl; a.download = "wuwa_map_z" + zoom + ".png"; a.click(); }}
-            style={{...S.btn, background: "#059669", color: "#fff", marginTop: 10}}>Download PNG</button>
+          <div style={{display: "flex", gap: 8, marginTop: 10}}>
+            {failedTiles.length > 0 && (
+              <button onClick={retryFailed} disabled={stitching}
+                style={{...S.btn, flex: 1, ...(stitching ? S.off : {background: "#d97706", color: "#fff"})}}>
+                {stitching ? "Retrying..." : "🔄 Retry " + failedTiles.length + " Failed"}
+              </button>
+            )}
+            <button onClick={() => { const a = document.createElement("a"); a.href = previewUrl; a.download = "wuwa_map_z" + zoom + ".png"; a.click(); }}
+              style={{...S.btn, flex: 1, background: "#059669", color: "#fff"}}>Download PNG</button>
+          </div>
         </div>}
 
         {/* INSTRUCTIONS */}
