@@ -29,9 +29,9 @@ function emptySource() {
     tileSize: 256, color: COLORS[0], swapXY: false, transpose: false, flipX: false, flipY: false };
 }
 var COLORS = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b"];
-var TOOLS = ["place", "paint", "pick", "swap", "box", "erase"];
-var TOOL_LABELS = { place: "Place", paint: "Paint", pick: "Pick", swap: "Swap", box: "Box", erase: "Erase" };
-var TOOL_COLORS = { place: "#3b82f6", paint: "#2563eb", pick: "#8b5cf6", swap: "#f59e0b", box: "#059669", erase: "#ef4444" };
+var TOOLS = ["hand", "place", "paint", "pick", "swap", "box", "erase"];
+var TOOL_LABELS = { hand: "\u270B", place: "Place", paint: "Paint", pick: "Pick", swap: "Swap", box: "Box", erase: "Erase" };
+var TOOL_COLORS = { hand: "#666", place: "#3b82f6", paint: "#2563eb", pick: "#8b5cf6", swap: "#f59e0b", box: "#059669", erase: "#ef4444" };
 
 export default function EditorTab() {
   var s = useState, a;
@@ -49,7 +49,7 @@ export default function EditorTab() {
   a = s(GRID_H); var gridH = a[0], setGridH = a[1];
   a = s(function() { return new Array(GRID_W * GRID_H).fill(null); });
   var grid = a[0], setGrid = a[1];
-  a = s("place"); var tool = a[0], setTool = a[1];
+  a = s("hand"); var tool = a[0], setTool = a[1];
   a = s(null); var selected = a[0], setSelected = a[1];
   a = s(null); var swapFirst = a[0], setSwapFirst = a[1];
   a = s(-1); var paletteFilter = a[0], setPaletteFilter = a[1];
@@ -279,6 +279,7 @@ export default function EditorTab() {
   }
 
   function onCellClick(idx) {
+    if (tool === "hand") return;
     if (tool === "place") { paintCell(idx); }
     else if (tool === "paint") { paintCell(idx); }
     else if (tool === "pick") { var cell = grid[idx]; if (cell) { setSelected(Object.assign({}, cell)); setTool("place"); } }
@@ -505,24 +506,29 @@ export default function EditorTab() {
 
     {/* GRID */}
     <div style={Object.assign({}, S.card, {padding: 4, overflow: "auto", WebkitOverflowScrolling: "touch", maxHeight: "60vh", touchAction: (tool === "paint" || tool === "erase") ? "none" : "auto"})}
-      onPointerDown={onGridPointerDown} onPointerUp={onGridPointerUp} onPointerLeave={onGridPointerUp}>
+      onPointerDown={tool !== "hand" ? onGridPointerDown : undefined} onPointerUp={tool !== "hand" ? onGridPointerUp : undefined} onPointerLeave={tool !== "hand" ? onGridPointerUp : undefined}>
       <div style={{display: "grid", gridTemplateColumns: "repeat(" + gridW + ", " + Math.max(2, Math.round(64 * gridZoom)) + "px)", gap: gridZoom <= 0.1 ? 0 : 1, background: "#111", width: "fit-content"}}>
         {grid.map(function(cell, idx) {
           var gx = idx % gridW, gy = Math.floor(idx / gridW);
           var cellSize = Math.max(2, Math.round(64 * gridZoom));
           var isSS = (tool === "swap" && swapFirst === idx) || (tool === "box" && boxFirst === idx);
+          var isHand = tool === "hand";
           if (gridZoom <= 0.1) {
             return <div key={idx}
-              onPointerDown={function(){onCellClick(idx)}} onPointerEnter={function(){onCellEnter(idx)}}
-              style={{width: cellSize, height: cellSize, cursor: "pointer", boxSizing: "border-box",
+              onPointerDown={isHand ? undefined : function(){onCellClick(idx)}}
+              onPointerEnter={isHand ? undefined : function(){onCellEnter(idx)}}
+              style={{width: cellSize, height: cellSize, cursor: isHand ? "grab" : "pointer", boxSizing: "border-box",
+                pointerEvents: isHand ? "none" : "auto",
                 background: cell ? (sources[cell.srcIdx] ? sources[cell.srcIdx].color : "#3b82f6") : "#0a0a0f",
                 border: isSS ? "1px solid #f59e0b" : "none"}} />;
           }
           return <div key={idx}
-            onPointerDown={function(){onCellClick(idx)}} onPointerEnter={function(){onCellEnter(idx)}}
+            onPointerDown={isHand ? undefined : function(){onCellClick(idx)}}
+            onPointerEnter={isHand ? undefined : function(){onCellEnter(idx)}}
             style={{width: cellSize, height: cellSize, background: cell ? "transparent" : "#0a0a0f",
               border: isSS ? "2px solid #f59e0b" : (gridZoom >= 0.5 ? "1px solid #1a1a2a" : "none"),
-              cursor: "pointer", position: "relative", overflow: "hidden", boxSizing: "border-box"}}>
+              cursor: isHand ? "grab" : "pointer", position: "relative", overflow: "hidden", boxSizing: "border-box",
+              pointerEvents: isHand ? "none" : "auto"}}>
             {cell && <img src={cell.dataUrl} draggable="false" style={{width: "100%", height: "100%", objectFit: "cover", display: "block", pointerEvents: "none"}} alt="" />}
             {!cell && gridZoom >= 0.5 && <span style={{position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: "0.4rem", color: "#222"}}>{gx + "," + gy}</span>}
             {cell && gridZoom >= 0.25 && cell.srcIdx !== undefined && sources[cell.srcIdx] && <div style={{position: "absolute", top: 0, right: 0, width: 5, height: 5, borderRadius: "0 0 0 3px", background: sources[cell.srcIdx].color}} />}
