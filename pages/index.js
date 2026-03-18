@@ -215,7 +215,9 @@ export default function Home() {
   async function stitch() {
     if (!tilePattern || stitching) return;
     stitchAbortRef.current = false;
-    setStitching(true); setPreviewUrl(null); setStitchProgress(0); setFailedTiles([]);
+    setStitching(true);
+    if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch(e){} }
+    setPreviewUrl(null); setStitchProgress(0); setFailedTiles([]);
     var cols = maxX - minX + 1, rows = maxY - minY + 1;
     var total = cols * rows, W = cols * tileSize, H = rows * tileSize;
     setStitchStatus("Stitching " + W + "x" + H + "px (" + total + " tiles)...");
@@ -230,7 +232,7 @@ export default function Home() {
     var result = await downloadTiles(all, ctx, total, false);
     setFailedTiles(result.failed);
     setStitchStatus("Done! " + result.done + "/" + total + (result.failed.length > 0 ? " - " + result.failed.length + " failed" : " All loaded!"));
-    c.toBlob(function(blob) { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
+    c.toBlob(function(blob) { if (blob) { if (previewUrl) try { URL.revokeObjectURL(previewUrl) } catch(e){} setPreviewUrl(URL.createObjectURL(blob)); } }, "image/png");
     setStitching(false);
   }
 
@@ -242,7 +244,7 @@ export default function Home() {
     var result = await downloadTiles(failedTiles, canvasCtx, failedTiles.length, true);
     setFailedTiles(result.failed);
     setStitchStatus("Retry done! " + result.done + " recovered." + (result.failed.length > 0 ? " " + result.failed.length + " still failing" : " All tiles loaded!"));
-    canvasEl.toBlob(function(blob) { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
+    canvasEl.toBlob(function(blob) { if (blob) { if (previewUrl) try { URL.revokeObjectURL(previewUrl) } catch(e){} setPreviewUrl(URL.createObjectURL(blob)); } }, "image/png");
     setStitching(false);
   }
 
@@ -284,7 +286,7 @@ export default function Home() {
     var result = await downloadTiles(missing, canvasCtx, missing.length, true);
     setFailedTiles(result.failed);
     setStitchStatus("Fetch missing done! " + result.done + " filled." + (result.failed.length > 0 ? " " + result.failed.length + " still missing" : " All complete!"));
-    canvasEl.toBlob(function(blob) { if (blob) setPreviewUrl(URL.createObjectURL(blob)); }, "image/png");
+    canvasEl.toBlob(function(blob) { if (blob) { if (previewUrl) try { URL.revokeObjectURL(previewUrl) } catch(e){} setPreviewUrl(URL.createObjectURL(blob)); } }, "image/png");
     setStitching(false);
   }
 

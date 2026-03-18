@@ -2,6 +2,9 @@
   "functions": {
     "pages/api/probe.js": {
       "maxDuration": 30
+    },
+    "pages/api/extract.js": {
+      "maxDuration": 30
     }
   }
 }

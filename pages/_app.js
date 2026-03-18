@@ -19,15 +19,17 @@ export default function App({ Component, pageProps }) {
     setIsStandalone(standalone);
 
     // Check if user previously dismissed (respect for 3 days)
-    var dismissedAt = localStorage.getItem("pwa-dismissed");
-    if (dismissedAt) {
-      var elapsed = Date.now() - parseInt(dismissedAt);
-      if (elapsed < 3 * 24 * 60 * 60 * 1000) {
-        setDismissed(true);
-      } else {
-        localStorage.removeItem("pwa-dismissed");
+    try {
+      var dismissedAt = localStorage.getItem("pwa-dismissed");
+      if (dismissedAt) {
+        var elapsed = Date.now() - parseInt(dismissedAt);
+        if (elapsed < 3 * 24 * 60 * 60 * 1000) {
+          setDismissed(true);
+        } else {
+          localStorage.removeItem("pwa-dismissed");
+        }
       }
-    }
+    } catch(e) {}
 
     // Listen for browser install prompt
     function onPrompt(e) {
@@ -72,7 +74,7 @@ export default function App({ Component, pageProps }) {
   function handleDismiss() {
     setShowBanner(false);
     setDismissed(true);
-    localStorage.setItem("pwa-dismissed", String(Date.now()));
+    try { localStorage.setItem("pwa-dismissed", String(Date.now())); } catch(e) {}
   }
 
   var isIos = typeof navigator !== "undefined" && /iphone|ipad|ipod/i.test(navigator.userAgent || "");

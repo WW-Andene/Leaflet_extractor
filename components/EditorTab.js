@@ -259,8 +259,9 @@ export default function EditorTab() {
       })(i, grid[i]); }
     Promise.all(promises).then(function() {
       c.toBlob(function(blob) { if (!blob) { setDlStatus("Render failed"); return; }
-        var dl = document.createElement("a"); dl.href = URL.createObjectURL(blob);
+        var dl = document.createElement("a"); var blobUrl = URL.createObjectURL(blob); dl.href = blobUrl;
         dl.download = "tilemap_" + W + "x" + H + ".png"; dl.click();
+        setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
         setDlStatus("Downloaded " + W + "x" + H + "px!"); }, "image/png"); });
   }
 
