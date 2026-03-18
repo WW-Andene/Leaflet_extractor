@@ -43,16 +43,18 @@ export default function EditorTab() {
   a = s(false); var loadingSrc = a[0], setLoadingSrc = a[1];
   a = s(""); var loadStatus = a[0], setLoadStatus = a[1];
   a = s(0); var loadProgress = a[0], setLoadProgress = a[1];
-  a = s(16); var gridW = a[0], setGridW = a[1];
-  a = s(16); var gridH = a[0], setGridH = a[1];
-  a = s(function() { return new Array(16 * 16).fill(null); });
+  // Fixed grid: 90x90 = 8100 tiles (max 8192)
+  var GRID_W = 90, GRID_H = 90;
+  a = s(GRID_W); var gridW = a[0], setGridW = a[1];
+  a = s(GRID_H); var gridH = a[0], setGridH = a[1];
+  a = s(function() { return new Array(GRID_W * GRID_H).fill(null); });
   var grid = a[0], setGrid = a[1];
   a = s("place"); var tool = a[0], setTool = a[1];
   a = s(null); var selected = a[0], setSelected = a[1];
   a = s(null); var swapFirst = a[0], setSwapFirst = a[1];
   a = s(-1); var paletteFilter = a[0], setPaletteFilter = a[1];
   a = s([]); var paletteTiles = a[0], setPaletteTiles = a[1];
-  a = s(1); var gridZoom = a[0], setGridZoom = a[1];
+  a = s(0.1); var gridZoom = a[0], setGridZoom = a[1];
   a = s(""); var dlStatus = a[0], setDlStatus = a[1];
   a = s(""); var sampleUrl = a[0], setSampleUrl = a[1];
   a = s(false); var detecting = a[0], setDetecting = a[1];
@@ -204,43 +206,66 @@ export default function EditorTab() {
   function autoPlace(idx) {
     var src = sources[idx]; var bank = bankRef.current;
     var srcCols = src.maxX - src.minX + 1, srcRows = src.maxY - src.minY + 1;
-    // transpose swaps grid layout (cols/rows)
     var placeCols = src.transpose ? srcRows : srcCols;
     var placeRows = src.transpose ? srcCols : srcRows;
-    var oldW = gridW, oldH = gridH, oldGrid = grid;
-    var hasContent = false, exMinX = oldW, exMaxX = 0, exMinY = oldH, exMaxY = 0;
-    for (var i = 0; i < oldGrid.length; i++) {
-      if (oldGrid[i]) { var cx = i % oldW, cy = Math.floor(i / oldW); hasContent = true;
-        if (cx < exMinX) exMinX = cx; if (cx > exMaxX) exMaxX = cx;
-        if (cy < exMinY) exMinY = cy; if (cy > exMaxY) exMaxY = cy; }
+    var W = gridW, H = gridH;
+
+    // Scan existing content bounding box
+    var hasContent = false;
+    var exMinX = W, exMaxX = 0, exMinY = H, exMaxY = 0;
+    for (var i = 0; i < grid.length; i++) {
+      if (grid[i]) {
+        var cx = i % W, cy = Math.floor(i / W);
+        hasContent = true;
+        if (cx < exMinX) exMinX = cx;
+        if (cx > exMaxX) exMaxX = cx;
+        if (cy < exMinY) exMinY = cy;
+        if (cy > exMaxY) exMaxY = cy;
+      }
     }
-    var offX, offY, newW, newH;
+
+    // Calculate offset
+    var offX, offY;
     if (!hasContent) {
-      newW = placeCols; newH = placeRows;
-      offX = 0; offY = 0;
+      // Center in grid
+      offX = Math.max(0, Math.floor((W - placeCols) / 2));
+      offY = Math.max(0, Math.floor((H - placeRows) / 2));
     } else {
-      offX = exMaxX + 1; offY = exMinY;
-      if (offX + placeCols > oldW + placeCols + 2) { offX = exMinX; offY = exMaxY + 1; }
-      newW = Math.max(oldW, offX + placeCols); newH = Math.max(oldH, offY + placeRows);
+      // Try right side (1-tile gap from existing content)
+      offX = exMaxX + 2;
+      offY = Math.max(0, Math.floor((exMinY + exMaxY) / 2 - placeRows / 2)); // vertically centered with existing
+      // If it doesn't fit on the right, try below
+      if (offX + placeCols > W) {
+        offX = Math.max(0, Math.floor((exMinX + exMaxX) / 2 - placeCols / 2)); // horizontally centered with existing
+        offY = exMaxY + 2;
+      }
+      // If it doesn't fit below either, place at first available corner
+      if (offY + placeRows > H) {
+        offX = 0; offY = 0;
+      }
     }
-    if (newW * newH > MAX_TILES) { offX = 0; offY = 0; newW = Math.max(oldW, placeCols); newH = Math.max(oldH, placeRows); }
-    var ng = new Array(newW * newH).fill(null);
-    for (var gy = 0; gy < newH; gy++) for (var gx = 0; gx < newW; gx++)
-      if (gx < oldW && gy < oldH) { var oi = gy * oldW + gx; if (oi < oldGrid.length && oldGrid[oi]) ng[gy * newW + gx] = oldGrid[oi]; }
+
+    // Clamp to grid bounds
+    offX = Math.min(offX, Math.max(0, W - placeCols));
+    offY = Math.min(offY, Math.max(0, H - placeRows));
+
+    // Place tiles into existing grid (no resize)
+    var ng = grid.slice();
     for (var dy = 0; dy < srcRows; dy++) for (var dx = 0; dx < srcCols; dx++) {
       var tileX = src.minX + dx, tileY = src.minY + dy;
       var key = tileKey(idx, tileX, tileY); if (!bank[key]) continue;
-      // transpose: swap dx/dy on grid. Flip applied after.
       var rawGx = src.transpose ? dy : dx;
       var rawGy = src.transpose ? dx : dy;
       var maxGx = src.transpose ? (srcRows - 1) : (srcCols - 1);
       var maxGy = src.transpose ? (srcCols - 1) : (srcRows - 1);
       var gx2 = src.flipX ? (maxGx - rawGx) : rawGx;
       var gy2 = src.flipY ? (maxGy - rawGy) : rawGy;
-      var gi = (offY + gy2) * newW + (offX + gx2);
-      if (gi >= 0 && gi < ng.length) ng[gi] = { key: key, dataUrl: bank[key], srcIdx: idx, ox: tileX, oy: tileY };
+      var finalX = offX + gx2, finalY = offY + gy2;
+      if (finalX >= 0 && finalX < W && finalY >= 0 && finalY < H) {
+        ng[finalY * W + finalX] = { key: key, dataUrl: bank[key], srcIdx: idx, ox: tileX, oy: tileY };
+      }
     }
-    setGrid(ng); setGridW(newW); setGridH(newH);
+    setGrid(ng);
   }
 
   function onCellClick(idx) {
@@ -252,29 +277,41 @@ export default function EditorTab() {
 
   function downloadGrid() {
     var tSize = sources[activeSrc] ? sources[activeSrc].tileSize : 256;
-    var W = gridW * tSize, H = gridH * tSize;
-    if (gridW * gridH > MAX_TILES) { setDlStatus("Exceeds " + MAX_TILES + " tiles!"); return; }
-    setDlStatus("Rendering " + W + "x" + H + "px...");
+    // Find bounding box of filled cells
+    var bMinX = gridW, bMaxX = 0, bMinY = gridH, bMaxY = 0;
+    var total = 0;
+    for (var i = 0; i < grid.length; i++) {
+      if (grid[i]) {
+        var gx = i % gridW, gy = Math.floor(i / gridW);
+        if (gx < bMinX) bMinX = gx; if (gx > bMaxX) bMaxX = gx;
+        if (gy < bMinY) bMinY = gy; if (gy > bMaxY) bMaxY = gy;
+        total++;
+      }
+    }
+    if (total === 0) { setDlStatus("Grid is empty!"); return; }
+    var cropW = bMaxX - bMinX + 1, cropH = bMaxY - bMinY + 1;
+    var W = cropW * tSize, H = cropH * tSize;
+    setDlStatus("Rendering " + W + "x" + H + "px (" + total + " tiles, cropped)...");
     var c = document.createElement("canvas"); c.width = W; c.height = H;
     var ctx = c.getContext("2d"); ctx.fillStyle = "#000"; ctx.fillRect(0, 0, W, H);
-    var total = grid.filter(function(cell) { return cell !== null; }).length;
-    if (total === 0) { setDlStatus("Grid is empty!"); return; }
     var promises = [];
-    for (var i = 0; i < grid.length; i++) { if (!grid[i]) continue;
-      (function(idx2, cell) { var gx = idx2 % gridW, gy = Math.floor(idx2 / gridW);
+    for (var i2 = 0; i2 < grid.length; i2++) { if (!grid[i2]) continue;
+      (function(idx2, cell) {
+        var gx2 = idx2 % gridW - bMinX, gy2 = Math.floor(idx2 / gridW) - bMinY;
         promises.push(new Promise(function(res) { var img = new Image();
-          img.onload = function() { ctx.drawImage(img, gx * tSize, gy * tSize, tSize, tSize); res(); };
+          img.crossOrigin = "anonymous";
+          img.onload = function() { ctx.drawImage(img, gx2 * tSize, gy2 * tSize, tSize, tSize); res(); };
           img.onerror = function() { res(); }; img.src = cell.dataUrl; }));
-      })(i, grid[i]); }
+      })(i2, grid[i2]); }
     Promise.all(promises).then(function() {
-      c.toBlob(function(blob) { if (!blob) { setDlStatus("Render failed"); return; }
+      c.toBlob(function(blob) { if (!blob) { setDlStatus("Render failed — canvas too large?"); return; }
         var dl = document.createElement("a"); var blobUrl = URL.createObjectURL(blob); dl.href = blobUrl;
         dl.download = "tilemap_" + W + "x" + H + ".png"; dl.click();
         setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 5000);
         setDlStatus("Downloaded " + W + "x" + H + "px!"); }, "image/png"); });
   }
 
-  function clearGrid() { setGrid(new Array(gridW * gridH).fill(null)); setSwapFirst(null); }
+  function clearGrid() { setGrid(new Array(GRID_W * GRID_H).fill(null)); setSwapFirst(null); }
   function clearBank() {
     var bank = bankRef.current;
     Object.keys(bank).forEach(function(k) { try { URL.revokeObjectURL(bank[k]); } catch(e){} });
@@ -395,7 +432,7 @@ export default function EditorTab() {
       </div>
       <div style={{display: "flex", gap: 6, alignItems: "center"}}>
         <p style={{fontSize: "0.72rem", color: "#888"}}>Zoom:</p>
-        {[0.25, 0.5, 1].map(function(z) { return <button key={z} onClick={function(){setGridZoom(z)}} style={Object.assign({}, S.sm, gridZoom === z ? {background: "#3b82f6"} : {})}>{z + "x"}</button>; })}
+        {[0.05, 0.1, 0.25, 0.5, 1].map(function(z) { return <button key={z} onClick={function(){setGridZoom(z)}} style={Object.assign({}, S.sm, gridZoom === z ? {background: "#3b82f6"} : {})}>{z + "x"}</button>; })}
         <div style={{flex: 1}} />
         <p style={{fontSize: "0.62rem", color: "#6ee7b7"}}>{filledCount + "/" + (gridW * gridH) + " filled"}</p>
       </div>
@@ -403,16 +440,25 @@ export default function EditorTab() {
 
     {/* GRID */}
     <div style={Object.assign({}, S.card, {padding: 4, overflow: "auto", WebkitOverflowScrolling: "touch", maxHeight: "60vh"})}>
-      <div style={{display: "grid", gridTemplateColumns: "repeat(" + gridW + ", " + Math.round(64 * gridZoom) + "px)", gap: 1, background: "#111", width: "fit-content"}}>
+      <div style={{display: "grid", gridTemplateColumns: "repeat(" + gridW + ", " + Math.round(64 * gridZoom) + "px)", gap: gridZoom <= 0.1 ? 0 : 1, background: "#111", width: "fit-content"}}>
         {grid.map(function(cell, idx) {
           var gx = idx % gridW, gy = Math.floor(idx / gridW);
-          var cellSize = Math.round(64 * gridZoom);
+          var cellSize = Math.max(2, Math.round(64 * gridZoom));
           var isSS = (tool === "swap" && swapFirst === idx);
+          // At tiny zoom, render simple colored squares (no images = much faster)
+          if (gridZoom <= 0.1) {
+            return <div key={idx} onClick={function(){onCellClick(idx)}}
+              style={{width: cellSize, height: cellSize, cursor: "pointer", boxSizing: "border-box",
+                background: cell ? (sources[cell.srcIdx] ? sources[cell.srcIdx].color : "#3b82f6") : "#0a0a0f",
+                border: isSS ? "1px solid #f59e0b" : "none"}} />;
+          }
           return <div key={idx} onClick={function(){onCellClick(idx)}}
-            style={{width: cellSize, height: cellSize, background: cell ? "transparent" : "#0a0a0f", border: isSS ? "2px solid #f59e0b" : "1px solid #1a1a2a", cursor: "pointer", position: "relative", overflow: "hidden", boxSizing: "border-box"}}>
+            style={{width: cellSize, height: cellSize, background: cell ? "transparent" : "#0a0a0f",
+              border: isSS ? "2px solid #f59e0b" : (gridZoom >= 0.5 ? "1px solid #1a1a2a" : "none"),
+              cursor: "pointer", position: "relative", overflow: "hidden", boxSizing: "border-box"}}>
             {cell && <img src={cell.dataUrl} style={{width: "100%", height: "100%", objectFit: "cover", display: "block"}} alt="" />}
             {!cell && gridZoom >= 0.5 && <span style={{position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: "0.4rem", color: "#222"}}>{gx + "," + gy}</span>}
-            {cell && cell.srcIdx !== undefined && sources[cell.srcIdx] && <div style={{position: "absolute", top: 0, right: 0, width: 5, height: 5, borderRadius: "0 0 0 3px", background: sources[cell.srcIdx].color}} />}
+            {cell && gridZoom >= 0.25 && cell.srcIdx !== undefined && sources[cell.srcIdx] && <div style={{position: "absolute", top: 0, right: 0, width: 5, height: 5, borderRadius: "0 0 0 3px", background: sources[cell.srcIdx].color}} />}
           </div>;
         })}
       </div>
