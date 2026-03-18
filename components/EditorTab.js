@@ -18,7 +18,7 @@ function loadTileAsBlob(src) {
       if (!r.ok) { res(null); return; }
       return r.blob();
     }).then(function(blob) {
-      if (!blob || blob.size < 200) { res(null); return; }
+      if (!blob || blob.size === 0) { res(null); return; }
       res({ blobUrl: URL.createObjectURL(blob), size: blob.size });
     }).catch(function() { res(null); });
   });
@@ -152,7 +152,7 @@ export default function EditorTab() {
       for (var j = 0; j < 4; j++) {
         var ti = i * 4 + j;
         tiles[ti].size = checks[ti].size || 0;
-        tiles[ti].exists = checks[ti].ok && checks[ti].size > 2000;
+        tiles[ti].exists = checks[ti].ok && checks[ti].size > 100;
         row.push(tiles[ti]);
       }
       rows.push(row);

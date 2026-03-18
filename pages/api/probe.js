@@ -157,20 +157,16 @@ async function testTileUrl(url) {
     var hdrs = { "User-Agent": "Mozilla/5.0", Accept: "image/*,*/*" };
     var ref = getReferer(url);
     if (ref) hdrs["Referer"] = ref;
+    // Use HEAD for fast bounds checking — most CDNs return 404 for missing tiles
     const r = await fetch(url, {
+      method: "HEAD",
       headers: hdrs,
-      signal: AbortSignal.timeout(4000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!r.ok) return false;
     const ct = r.headers.get("content-type") || "";
-    if (!ct.includes("image") && !ct.includes("octet")) return false;
-    const buf = await r.arrayBuffer();
-    const size = buf.byteLength;
-    if (refTileSize > 0) {
-      if (size < 3000 && size < refTileSize * 0.15) return false;
-    } else {
-      if (size < 500) return false;
-    }
+    // Accept if content-type is image, or if no content-type (some CDNs omit it)
+    if (ct && !ct.includes("image") && !ct.includes("octet") && !ct.includes("binary")) return false;
     return true;
   } catch (e) { return false; }
 }

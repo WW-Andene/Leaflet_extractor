@@ -150,7 +150,7 @@ export default function Home() {
         var t = tiles[idx];
         var c = checks[idx];
         t.size = c.size || 0;
-        t.exists = c.ok && c.size > 2000;
+        t.exists = c.ok && c.size > 100;
         row.push(t);
       }
       grid.push(row);
