@@ -2,9 +2,12 @@ import { useState, useRef, useCallback } from "react";
 
 var MAX_TILES = 8192;
 
-function buildUrl(pat, z, x, y, swapXY) {
-  if (swapXY) return pat.replace("{z}", z).replace("{x}", y).replace("{y}", x);
-  return pat.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+var COORD_ORDERS = ["zxy", "zyx", "xzy", "xyz", "yzx", "yxz"];
+
+function buildUrl(pat, z, x, y, order) {
+  var o = order || "zxy";
+  var vals = { z: z, x: x, y: y };
+  return pat.replace("{z}", vals[o[0]]).replace("{x}", vals[o[1]]).replace("{y}", vals[o[2]]);
 }
 function tileKey(src, x, y) { return src + ":" + x + "," + y; }
 function loadImgAsDataUrl(src) {
@@ -24,7 +27,7 @@ function loadImgAsDataUrl(src) {
 function wait(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 function emptySource() {
   return { name: "", pattern: "", zoom: 3, minX: 0, maxX: 7, minY: 0, maxY: 7,
-    tileSize: 256, color: COLORS[0], swapXY: false, flipX: false, flipY: false };
+    tileSize: 256, color: COLORS[0], coordOrder: "zxy", transpose: false, flipX: false, flipY: false };
 }
 var COLORS = ["#3b82f6", "#ef4444", "#10b981", "#f59e0b"];
 var TOOLS = ["place", "pick", "swap", "erase"];
@@ -131,7 +134,7 @@ export default function EditorTab() {
       var row = [];
       for (var dx = -1; dx <= 2; dx++) {
         var x = cx + dx, y = cy + dy;
-        row.push({ x: x, y: y, url: "/api/tile-proxy?url=" + encodeURIComponent(buildUrl(src.pattern, src.zoom, x, y, src.swapXY)), label: "x=" + x + " y=" + y });
+        row.push({ x: x, y: y, url: "/api/tile-proxy?url=" + encodeURIComponent(buildUrl(src.pattern, src.zoom, x, y, src.coordOrder)), label: "x=" + x + " y=" + y });
       }
       rows.push(row);
     }
@@ -156,7 +159,7 @@ export default function EditorTab() {
         }
         var key = tileKey(idx, x, y);
         if (bank[key]) { done++; setLoadProgress(Math.round(((done + failed) / total) * 100)); continue; }
-        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, false);
+        var rawUrl = buildUrl(src.pattern, src.zoom, x, y, src.coordOrder);
         var dataUrl = await loadImgAsDataUrl("/api/tile-proxy?url=" + encodeURIComponent(rawUrl));
         if (dataUrl) { bank[key] = dataUrl; done++; } else failed++;
         setLoadProgress(Math.round(((done + failed) / total) * 100));
@@ -174,9 +177,9 @@ export default function EditorTab() {
   function autoPlace(idx) {
     var src = sources[idx]; var bank = bankRef.current;
     var srcCols = src.maxX - src.minX + 1, srcRows = src.maxY - src.minY + 1;
-    // swapXY transposes the grid layout (cols/rows swapped)
-    var placeCols = src.swapXY ? srcRows : srcCols;
-    var placeRows = src.swapXY ? srcCols : srcRows;
+    // transpose swaps grid layout (cols/rows)
+    var placeCols = src.transpose ? srcRows : srcCols;
+    var placeRows = src.transpose ? srcCols : srcRows;
     var oldW = gridW, oldH = gridH, oldGrid = grid;
     var hasContent = false, exMinX = oldW, exMaxX = 0, exMinY = oldH, exMaxY = 0;
     for (var i = 0; i < oldGrid.length; i++) {
@@ -200,11 +203,11 @@ export default function EditorTab() {
     for (var dy = 0; dy < srcRows; dy++) for (var dx = 0; dx < srcCols; dx++) {
       var tileX = src.minX + dx, tileY = src.minY + dy;
       var key = tileKey(idx, tileX, tileY); if (!bank[key]) continue;
-      // swapXY: transpose dx/dy on grid. Flip applied after.
-      var rawGx = src.swapXY ? dy : dx;
-      var rawGy = src.swapXY ? dx : dy;
-      var maxGx = src.swapXY ? (srcRows - 1) : (srcCols - 1);
-      var maxGy = src.swapXY ? (srcCols - 1) : (srcRows - 1);
+      // transpose: swap dx/dy on grid. Flip applied after.
+      var rawGx = src.transpose ? dy : dx;
+      var rawGy = src.transpose ? dx : dy;
+      var maxGx = src.transpose ? (srcRows - 1) : (srcCols - 1);
+      var maxGy = src.transpose ? (srcCols - 1) : (srcRows - 1);
       var gx2 = src.flipX ? (maxGx - rawGx) : rawGx;
       var gy2 = src.flipY ? (maxGy - rawGy) : rawGy;
       var gi = (offY + gy2) * newW + (offX + gx2);
@@ -281,8 +284,12 @@ export default function EditorTab() {
             <div><p style={S.ml}>MinY</p><input type="number" value={src.minY} onChange={function(e){updateSource(idx, "minY", +e.target.value)}} style={S.si} /></div>
             <div><p style={S.ml}>MaxY</p><input type="number" value={src.maxY} onChange={function(e){updateSource(idx, "maxY", +e.target.value)}} style={S.si} /></div>
           </div>
-          <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginTop: 8}}>
-            <div><p style={S.ml}>Swap XY</p><button onClick={toggleSrc("swapXY")} style={Object.assign({}, S.toggle, {background: src.swapXY ? "#d97706" : "#333"})}>{src.swapXY ? "ON" : "OFF"}</button></div>
+          <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginTop: 8}}>
+            <div><p style={S.ml}>Order</p><button onClick={function(){
+              var i = COORD_ORDERS.indexOf(src.coordOrder);
+              updateSource(idx, "coordOrder", COORD_ORDERS[(i + 1) % COORD_ORDERS.length]);
+            }} style={Object.assign({}, S.toggle, {background: src.coordOrder !== "zxy" ? "#d97706" : "#333"})}>{src.coordOrder.toUpperCase()}</button></div>
+            <div><p style={S.ml}>Transpose</p><button onClick={toggleSrc("transpose")} style={Object.assign({}, S.toggle, {background: src.transpose ? "#d97706" : "#333"})}>{src.transpose ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip X</p><button onClick={toggleSrc("flipX")} style={Object.assign({}, S.toggle, {background: src.flipX ? "#d97706" : "#333"})}>{src.flipX ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip Y</p><button onClick={toggleSrc("flipY")} style={Object.assign({}, S.toggle, {background: src.flipY ? "#d97706" : "#333"})}>{src.flipY ? "ON" : "OFF"}</button></div>
           </div>
@@ -303,7 +310,7 @@ export default function EditorTab() {
     {/* 4x4 PREVIEW */}
     {srcPreview && <div style={S.card}>
       <p style={S.sec}>{"4x4 Preview (Source " + (srcPreview.srcIdx + 1) + ")"}</p>
-      <p style={{fontSize: "0.68rem", color: "#888", marginBottom: 6}}>If wrong, toggle Swap XY / Flip, tap 4x4 again.</p>
+      <p style={{fontSize: "0.68rem", color: "#888", marginBottom: 6}}>If wrong, cycle Order or toggle Transpose/Flip, tap 4x4 again.</p>
       <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 1, background: "#000", borderRadius: 6, overflow: "hidden"}}>
         {srcPreview.rows.flat().map(function(tile, i) {
           return <div key={i} style={{position: "relative", background: "#0a0a0f"}}>
