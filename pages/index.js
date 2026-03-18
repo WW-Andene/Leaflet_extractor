@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
+import EditorTab from "../components/EditorTab";
 
 var PRESETS = [
   { label: "Overworld", url: "https://wuthering.gg/map" },
@@ -41,6 +42,8 @@ export default function Home() {
   a = s(null); var canvasEl = a[0], setCanvasEl = a[1];
   a = s(null); var probeResults = a[0], setProbeResults = a[1];
   a = s(false); var probing = a[0], setProbing = a[1];
+
+  var stitchAbortRef = useRef(false);
 
   // --- EXTRACT ---
   async function extract() {
@@ -140,6 +143,10 @@ export default function Home() {
     var maxRetries = slow ? 5 : 3;
 
     for (var i = 0; i < tiles.length; i += batchSize) {
+      if (stitchAbortRef.current) {
+        setStitchStatus("Stopped! " + done + " loaded, " + failed.length + " failed, rest skipped");
+        return { done: done, failed: failed };
+      }
       var b = tiles.slice(i, i + batchSize);
       var promises = b.map(function(tile) {
         return (async function(x, y) {
@@ -171,6 +178,7 @@ export default function Home() {
   // --- STITCH ---
   async function stitch() {
     if (!tilePattern || stitching) return;
+    stitchAbortRef.current = false;
     setStitching(true); setPreviewUrl(null); setStitchProgress(0); setFailedTiles([]);
     var cols = maxX - minX + 1, rows = maxY - minY + 1;
     var total = cols * rows, W = cols * tileSize, H = rows * tileSize;
@@ -244,6 +252,8 @@ export default function Home() {
     setStitching(false);
   }
 
+  function stopStitch() { stitchAbortRef.current = true; }
+
   // --- RENDER ---
   return (
     <div style={S.wrap}>
@@ -253,7 +263,7 @@ export default function Home() {
       <div style={S.tabs}>
         <button style={Object.assign({}, S.tab, tab === "extract" ? S.tabOn : {})} onClick={function(){setTab("extract")}}>Extract</button>
         <button style={Object.assign({}, S.tab, tab === "stitch" ? S.tabOn : {})} onClick={function(){setTab("stitch")}}>Stitch</button>
-        <a href="/editor" style={Object.assign({}, S.tab, {textDecoration: "none", background: "#1e1e2e", borderColor: "#7c3aed", color: "#a78bfa"})}>Editor</a>
+        <button style={Object.assign({}, S.tab, tab === "editor" ? {background: "#2d1b4e", color: "#a78bfa", borderColor: "#7c3aed"} : {background: "#1e1e2e", borderColor: "#7c3aed", color: "#a78bfa"})} onClick={function(){setTab("editor")}}>Editor</button>
       </div>
 
       {tab === "extract" && <>
@@ -341,7 +351,8 @@ export default function Home() {
           <div style={{display: "flex", gap: 6, marginTop: 10}}>
             <button onClick={testOneTile} disabled={!tilePattern} style={Object.assign({}, S.btn, {flex: 1, background: "#d97706", color: "#fff"})}>Test 1</button>
             <button onClick={showGridPreview} disabled={!tilePattern} style={Object.assign({}, S.btn, {flex: 1, background: "#6d28d9", color: "#fff"})}>4x4</button>
-            <button onClick={stitch} disabled={stitching || !tilePattern} style={Object.assign({}, S.btn, {flex: 1}, stitching ? S.off : S.blue)}>{stitching ? "..." : "Stitch"}</button>
+            {!stitching && <button onClick={stitch} disabled={!tilePattern} style={Object.assign({}, S.btn, {flex: 1}, S.blue)}>Stitch</button>}
+            {stitching && <button onClick={stopStitch} style={Object.assign({}, S.btn, {flex: 1, background: "#dc2626", color: "#fff"})}>Stop</button>}
           </div>
           {stitchStatus && <p style={S.st}>{stitchStatus}</p>}
           {stitching && stitchProgress > 0 && <div style={S.bar}><div style={Object.assign({}, S.fill, {width: stitchProgress + "%"})} /></div>}
@@ -401,6 +412,11 @@ export default function Home() {
           </p>
         </div>
       </>}
+
+      {/* Editor tab - stays mounted so state persists */}
+      <div style={{display: tab === "editor" ? "block" : "none"}}>
+        <EditorTab />
+      </div>
     </div>
   );
 }
