@@ -253,6 +253,7 @@ export default function Home() {
       <div style={S.tabs}>
         <button style={Object.assign({}, S.tab, tab === "extract" ? S.tabOn : {})} onClick={function(){setTab("extract")}}>Extract</button>
         <button style={Object.assign({}, S.tab, tab === "stitch" ? S.tabOn : {})} onClick={function(){setTab("stitch")}}>Stitch</button>
+        <a href="/editor" style={Object.assign({}, S.tab, {textDecoration: "none", background: "#1e1e2e", borderColor: "#7c3aed", color: "#a78bfa"})}>Editor</a>
       </div>
 
       {tab === "extract" && <>
