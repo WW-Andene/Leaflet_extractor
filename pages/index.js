@@ -34,6 +34,8 @@ export default function Home() {
   const [useProxy, setUseProxy] = useState(true);
   const [flipY, setFlipY] = useState(false);
   const [flipX, setFlipX] = useState(false);
+  const [swapXY, setSwapXY] = useState(false);
+  const [gridPreview, setGridPreview] = useState(null);
   const [probeImg, setProbeImg] = useState(null);
   const [probing, setProbing] = useState(false);
   const [probeResults, setProbeResults] = useState(null);
@@ -88,6 +90,9 @@ export default function Home() {
 
   // --- STITCH ---
   function buildUrl(pattern, z, x, y) {
+    if (swapXY) {
+      return pattern.replace("{z}", z).replace("{x}", y).replace("{y}", x);
+    }
     return pattern.replace("{z}", z).replace("{x}", x).replace("{y}", y);
   }
   function loadImg(src) {
@@ -101,6 +106,28 @@ export default function Home() {
   }
   function proxied(u) {
     return useProxy ? "/api/tile-proxy?url=" + encodeURIComponent(u) : u;
+  }
+
+  // Show a 4x4 grid preview from the center of the map
+  async function showGridPreview() {
+    const centerX = Math.round((minX + maxX) / 2);
+    const centerY = Math.round((minY + maxY) / 2);
+    const grid = [];
+    for (let dy = -1; dy <= 2; dy++) {
+      const row = [];
+      for (let dx = -1; dx <= 2; dx++) {
+        const x = centerX + dx;
+        const y = centerY + dy;
+        const rawUrl = buildUrl(tilePattern, zoom, x, y);
+        row.push({
+          x, y,
+          url: proxied(rawUrl),
+          label: "x=" + x + " y=" + y,
+        });
+      }
+      grid.push(row);
+    }
+    setGridPreview(grid);
   }
 
   async function testOneTile() {
@@ -255,7 +282,7 @@ export default function Home() {
           <div style={S.g3}>
             <div><p style={S.ml}>Flip Y (TMS)</p><button onClick={() => setFlipY(!flipY)} style={{...S.si, background: flipY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"}}>{flipY ? "ON" : "OFF"}</button></div>
             <div><p style={S.ml}>Flip X</p><button onClick={() => setFlipX(!flipX)} style={{...S.si, background: flipX ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"}}>{flipX ? "ON" : "OFF"}</button></div>
-            <div></div>
+            <div><p style={S.ml}>Swap X↔Y</p><button onClick={() => setSwapXY(!swapXY)} style={{...S.si, background: swapXY ? "#d97706" : "#333", color: "#fff", border: "none", cursor: "pointer", textAlign: "center"}}>{swapXY ? "ON" : "OFF"}</button></div>
           </div>
           <div style={S.g4}>
             <div><p style={S.ml}>Min X</p><input type="number" value={minX} onChange={e => setMinX(+e.target.value)} style={S.si} /></div>
@@ -267,8 +294,9 @@ export default function Home() {
             Output: {(maxX - minX + 1) * tileSize}x{(maxY - minY + 1) * tileSize}px ({(maxX - minX + 1) * (maxY - minY + 1)} tiles)
           </p>
           <div style={{display: "flex", gap: 8, marginTop: 10}}>
-            <button onClick={testOneTile} disabled={!tilePattern} style={{...S.btn, flex: 1, background: "#d97706", color: "#fff"}}>Test 1 Tile</button>
-            <button onClick={stitch} disabled={stitching || !tilePattern} style={{...S.btn, flex: 1, ...(stitching ? S.off : S.blue)}}>{stitching ? "Stitching..." : "Stitch All"}</button>
+            <button onClick={testOneTile} disabled={!tilePattern} style={{...S.btn, flex: 1, background: "#d97706", color: "#fff"}}>Test 1</button>
+            <button onClick={showGridPreview} disabled={!tilePattern} style={{...S.btn, flex: 1, background: "#6d28d9", color: "#fff"}}>4x4 Grid</button>
+            <button onClick={stitch} disabled={stitching || !tilePattern} style={{...S.btn, flex: 1, ...(stitching ? S.off : S.blue)}}>{stitching ? "..." : "Stitch All"}</button>
           </div>
           {stitchStatus && <p style={S.st}>{stitchStatus}</p>}
           {stitching && stitchProgress > 0 && <div style={S.bar}><div style={{...S.fill, width: stitchProgress + "%"}} /></div>}
@@ -277,6 +305,24 @@ export default function Home() {
         {probeImg && <div style={S.card}>
           <p style={S.sec}>Tile Preview:</p>
           <img src={probeImg} style={{maxWidth: "100%", borderRadius: 6, border: "1px solid #333"}} alt="probe" />
+        </div>}
+
+        {gridPreview && <div style={S.card}>
+          <p style={S.sec}>4x4 Grid Preview (center of map):</p>
+          <p style={{fontSize: "0.7rem", color: "#888", marginBottom: 8}}>
+            If tiles don{"'"}t form a smooth image, try toggling Swap X↔Y or Flip options above, then tap "4x4 Grid" again.
+          </p>
+          <div style={{display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 1, background: "#000", borderRadius: 6, overflow: "hidden"}}>
+            {gridPreview.flat().map((tile, i) => (
+              <div key={i} style={{position: "relative", background: "#0a0a0f"}}>
+                <img src={tile.url} style={{width: "100%", display: "block"}}
+                  alt={tile.label} onError={(e) => {e.target.style.opacity = 0.1;}} />
+                <div style={{position: "absolute", bottom: 0, left: 0, right: 0, background: "rgba(0,0,0,0.7)", color: "#6ee7b7", fontSize: "0.5rem", padding: "2px 4px", textAlign: "center"}}>
+                  {tile.label}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>}
 
         {previewUrl && <div style={S.card}>
